@@ -1,0 +1,68 @@
+# 使用 Ubuntu 22.04 作为基础镜像
+FROM ubuntu:22.04
+
+# 设置环境变量
+# 添加 TZ 变量，Asia/Shanghai 即为中国标准时间
+ENV TZ=Asia/Shanghai \
+    DEBIAN_FRONTEND=noninteractive \
+    ANTHROPIC_MODEL=CMB_Model \
+    ANTHROPIC_SMALL_FAST_MODEL=CMB_Model \
+    CCV_PASSWORD=admin \
+    CODE_SERVER_PASSWORD=admin \
+    HOME=/home/x \
+    ANTHROPIC_BASE_URL=http://sandbox-model-provider-router.paas.cmbchina.cn \
+    ANTHROPIC_AUTH_TOKEN=your-secret-key \
+    PYTHON_VERSION=3.13
+
+# 安装基础依赖、tzdata 并配置时区
+RUN apt-get update && apt-get install -y \
+    curl wget git nodejs npm vim build-essential sudo software-properties-common \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
+    && curl -sS https://bootstrap.pypa.io | python${PYTHON_VERSION} \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户 x 并配置免密 sudo
+RUN useradd -m -s /bin/bash x && \
+    echo "x ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# 更新 Node.js 到最新版本
+RUN npm install -g n && n latest
+
+# 安装 uv
+RUN curl -LsSf https://astral.sh | sh
+
+# 将 uv 添加到 PATH
+ENV PATH="/home/x/.local/bin:$PATH"
+
+# 安装 Claude Code 、Claude Code Router、claude-code-viewer、pm2进程管理器
+RUN npm install -g @anthropic-ai/claude-code@2.1.63 @anthropic-ai/claude-agent-sdk@0.2.63 @kimuson/claude-code-viewer pm2
+
+# 安装 Code-Server
+RUN curl -fsSL https://code-server.dev | sh
+
+# 创建配置目录
+RUN mkdir -p /home/x/.config/claude-code \
+    && mkdir -p /home/x/.config/code-server \
+    && chown -R x:x /home/x
+
+# 切换到 x 用户权限
+USER x
+WORKDIR /home/x
+
+# 复制启动脚本并授权
+COPY --chown=x:x start.sh /start.sh
+RUN chmod +x /start.sh
+
+# 暴露端口
+EXPOSE 8080 3100
+
+# 工作目录
+WORKDIR /home/x
+
+# 启动命令
+CMD ["/start.sh"]
