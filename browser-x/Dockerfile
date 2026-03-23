@@ -43,6 +43,11 @@ RUN apt-get update && apt-get install -y \
  && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
  && curl -sS https://bootstrap.pypa.io/get-pip.py | python${PYTHON_VERSION} \
  && pip install playwright supervisor fastmcp cffi cryptography\
+ && curl -LO "https://github.com/oras-project/oras/releases/download/v1.3.1/oras_1.3.1_linux_amd64.tar.gz" \
+ && mkdir -p oras-install \
+ && tar -zxf oras_1.3.1_linux_amd64.tar.gz -C oras-install \
+ && mv oras-install/oras /usr/local/bin/ \
+ && rm -rf oras_1.3.1_linux_amd64.tar.gz oras-install \
  && rm -rf /var/lib/apt/lists/*
 
 #######################################
