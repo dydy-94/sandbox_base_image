@@ -37,6 +37,13 @@ RUN apt-get update && apt-get install -y \
     wget \
     git \
     vim \
+    fcitx5 \
+    fcitx5-chinese-addons \
+    fcitx5-frontend-gtk3 \
+    fcitx5-frontend-qt5 \
+    dbus-x11 \
+    im-config \
+    locales \
  && add-apt-repository -y ppa:deadsnakes/ppa \
  && apt-get update \
  && apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
@@ -102,7 +109,7 @@ APT_CONFIG
 ###########################
 # chrome mcp配置下发
 #######################################
-RUN apt-get update 
+# RUN apt-get update 
 
 RUN cat > "/home/x/.mcp2rest/config.yaml" << 'MCP2REST_CONFIG'
 servers:
