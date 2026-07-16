@@ -1,0 +1,8 @@
+go 1.25.4
+
+use (
+	./daemon
+	./libs/api-client-go
+	./libs/common-go
+	./libs/computer-use
+)

@@ -18,15 +18,28 @@
 x-image-k8s-no-root/
 ├── Dockerfile                              # 唯一的 build 指令
 ├── bin/
-│   └── daytona                             # daytona daemon 主 binary（30 MB）
+│   └── daytona                             # daytona daemon 主 binary（43 MB，含 JWT 鉴权）
+├── daemon/                                 # daytona 源码（同事 fork 自 daytonaio，含 JWT 鉴权改造）
+│   ├── cmd/                                # 主入口 + config
+│   ├── pkg/                                # toolbox / git / ssh / terminal 等
+│   ├── go.mod / go.sum                     # 依赖清单
+│   ├── Dockerfile / auth.yaml.example     # 同事原版 Dockerfile + 鉴权 yaml 模板
+│   └── docs/AUTH.md                        # 鉴权详细说明
+├── libs/                                   # workspace 模式的兄弟 module（编译 daemon 用）
+│   ├── api-client-go/                      # Go API 客户端
+│   ├── common-go/                          # 公共错误/代理（daemon 强依赖）
+│   └── computer-use/                       # computer-use 插件源码（编译后产物在 dist/libs/）
+├── go.work                                 # Go workspace 配置（让 ./daemon 找到 ./libs/*）
 ├── dist/
 │   └── libs/
-│       └── computer-use-amd64              # daytona 电脑使用插件（100 MB）
+│       └── computer-use-amd64              # daytona 电脑使用插件（15 MB，步骤 11 拷进镜像）
 ├── .dockerignore                           # 限制 build context（建议加）
 └── README.md                               # 本文件
 ```
 
 这个 `Dockerfile` 与项目内 `D:\AIO 新镜像打造\Dockerfile.v2` 是逐字节一致的——只是迁移过来后去掉了 `.v2` 后缀。
+
+> `daemon/`、`libs/`、`go.work` 是为了**重新编译带鉴权的 daemon** 用的，**不会**进入 docker build context（步骤 11 只 COPY `dist/libs/computer-use-amd64`，步骤 9 只 COPY `bin/daytona`）。
 
 ---
 
@@ -46,7 +59,7 @@ x-image-k8s-no-root/
 | 9 | `COPY bin/daytona` | 把 daytona daemon 主 binary 放到 `/usr/local/bin/`，chown 给 x |
 | 10 | volume 目录 | 建 `/home/x/.daemon/{state,logs}`、`/tmp/daytona-logs`、**`/var/log/gem/daytona/`**——最后这个是步骤 14 的关键 |
 | 11 | `COPY dist/libs/computer-use-amd64` | 把 computer-use 插件放到 `/usr/local/lib/daytona-computer-use/daytona-computer-use`，chown 给 x |
-| 12 | 默认 `ENV` | 4 个 daytona 需要的 `DAYTONA_*` / `LOG_LEVEL` 环境变量 |
+| 12 | 默认 `ENV` | 5 个环境变量：`DAYTONA_DAEMON_LOG_FILE_PATH`、`DAYTONA_ENTRYPOINT_LOG_FILE_PATH`、`DAYTONA_USER_HOME_AS_WORKDIR`、`LOG_LEVEL`、`DAYTONA_AUTH_ENABLED=false`（**鉴权默认关闭**，运行时通过 K8s ConfigMap/Secret 或 -e 覆盖；详见第 8 节） |
 | 13 | `EXPOSE` | 8080（nginx）、2280、22222、22220（daytona SSH）|
 | 14 | `[program:daytona]` | append supervisord block：以 `user=x` 跑 `/usr/local/bin/daytona --interval 5`，stdout/stderr 写到 `/var/log/gem/daytona/` |
 | 15 | ENTRYPOINT | 不显式设置——保留基础镜像的 `/opt/application/run.sh` |
@@ -111,6 +124,28 @@ RUN mkdir -p /var/log/gem/daytona && \
 - 网络能拉 `enterprise-public-cn-beijing.cr.volces.com`（基础镜像）
 - 网络能拉 `central.jaf.cmbchina.cn`（公司 npm/pip 镜像，运行时）
 - 目录里有 `bin/daytona` 和 `dist/libs/computer-use-amd64` 两个 binary
+- **`bin/daytona` 必须是含 JWT 鉴权的版本**（42~43 MB）。原版 32 MB 的二进制没有鉴权，build 出来的镜像也不会鉴权。详见下方"重编译 daemon"小节。
+
+### 重编译 daemon（如果你改了 `daemon/` 源码或要升级鉴权）
+
+```powershell
+cd D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root
+
+# 国内代理 + linux/amd64 交叉编译
+$env:GOPROXY='https://goproxy.cn,direct'
+$env:GOSUMDB='sum.golang.google.cn'
+$env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+
+# ⚠️ 输出文件名必须是 bin\daytona（不能叫 daytona-new-amd64），
+# 因为 Dockerfile 步骤 9 写死了 COPY bin/daytona /usr/local/bin/daytona。
+# 如果编译到 daytona-new-amd64，build 出来的镜像里 daytona 还是原版，新代码进不去
+go build -ldflags "-X 'github.com/daytonaio/daemon/internal.Version=dev'" `
+         -o bin\daytona .\daemon\cmd\daemon
+
+Get-Item bin\daytona    # 看 LastWriteTime 是刚才
+```
+
+前置依赖（`libs/common-go`、`libs/computer-use`、`libs/api-client-go`、`go.work`）和踩坑细节详见第 8.2 节。
 
 ### 一次性 build
 
@@ -202,6 +237,33 @@ docker exec aio-test ls -la /var/log/gem/daytona/
 #   http://localhost:18080
 ```
 
+### 启用 JWT 鉴权（可选）
+
+镜像默认 `DAYTONA_AUTH_ENABLED=false`，要开启的话 `-e` 加几个环境变量：
+
+```bash
+docker run -d \
+  --security-opt seccomp=unconfined \
+  --shm-size=2g \
+  -p 18080:8080 -p 2280:2280 -p 22222:22222 -p 22220:22220 \
+  --name aio-test-auth \
+  -e DAYTONA_AUTH_ENABLED=true \
+  -e DAYTONA_AUTH_VALIDATE_ISSUER=true \
+  -e DAYTONA_AUTH_JWT_ISSUER=https://oidc.idc.cmbchina.cn/ \
+  aio-daytona-x:v2
+
+# 验证：白名单放行
+curl.exe http://localhost:18080/version
+# 期望: 200
+
+# 验证：缺 token 拒绝
+curl.exe -i -X POST http://localhost:18080/process/execute \
+  -H "Content-Type: application/json" -d '{"command":"echo hi"}'
+# 期望: 401 {"error":"unauthorized","reason":"missing id-token header"}
+```
+
+完整三组测试用例 + K8s ConfigMap/Secret 模板见第 8.3、8.4 节。
+
 ### 推到 K8s
 - 把镜像 tag 填到 sandbox template 的 `image:` 字段
 - sandbox template 的 volumeMounts 必须有：`/home/x/experts`、`/home/x/projects`、`/home/x/.data`、`/home/x/.x/xmemory`——其他 `/home/x/` 路径会在每次 `Resume` 时被清
@@ -232,7 +294,51 @@ cat /proc/92/environ | tr '\0' '\n' | grep -E 'DAYTONA|LOG_LEVEL'
 # 4. 日志目录 x 可写
 ls -ld /var/log/gem/daytona/
 #   drwxr-xr-x 2 x x  ... /var/log/gem/daytona/
+
+# 5. 验证 daemon 二进制含 JWT 鉴权（看启动日志）
+grep -E 'Auth enabled|JWT auth' /var/log/gem/daytona/daytona.log
+# 鉴权关闭时（默认）:
+#   JWT auth disabled
+# 鉴权开启时（-e DAYTONA_AUTH_ENABLED=true）:
+#   Auth enabled: true, algorithm: HS256, header: id-token, ExcludePaths: [...]
+#   JWT auth enabled: algorithm=HS256, header=id-token, issuer="https://...", audience=""
+
+# 6. 验证请求日志有 auth_result 字段（鉴权开启时）
+tail -n 50 /var/log/gem/daytona/daytona.log | grep auth_result
+# 期望: auth_result=passed / missing_token / invalid_issuer 等
 ```
+
+### 6.1 日志落盘位置（重要）
+
+daemon **写两套日志**，路径完全不同：
+
+| 日志类型 | 路径 | 内容 | 怎么看 |
+|---|---|---|---|
+| **daemon 内部日志**（logrus） | `/tmp/daytona-daemon.log` | 启动 banner、**`auth_result` 鉴权结果**、业务日志 | `kubectl exec ... -- tail -f /tmp/daytona-daemon.log` |
+| **supervisord 抓的 stdout/stderr** | `/var/log/gem/daytona/daytona.log` 和 `daytona_err.log` | 进程启动/退出、panic、未被 logrus 接管的输出 | `kubectl exec ... -- tail -f /var/log/gem/daytona/daytona.log` |
+
+⚠️ **`kubectl logs` 默认看不到鉴权日志**——因为 daemon 用 `os.OpenFile` 把日志写到文件里，不走 stdout。要让 `kubectl logs` 能看到，把 [Dockerfile 步骤 12](Dockerfile) 改成：
+
+```dockerfile
+ENV DAYTONA_DAEMON_LOG_FILE_PATH=
+```
+
+留空 → daemon 走 stderr → supervisord 抓到 → `kubectl logs` 可见。
+
+```bash
+# 改完重新 build + 部署
+docker buildx build --platform=linux/amd64 -t aio-daytona-x:v2 -f Dockerfile --load .
+kubectl rollout restart deployment/daytona-daemon
+
+# 触发一次鉴权失败
+curl -X POST http://<sandbox-svc>:8080/process/execute -H "Content-Type: application/json" -d '{"command":"ls"}'
+
+# kubectl logs 看 auth_result
+kubectl logs <sandbox-pod> | grep auth_result
+# 期望: {"auth_result":"missing_token","reason":"missing id-token header", ...}
+```
+
+⚠️ 这两个路径**都没挂到宿主机或 PVC**，Pod 重建就丢。生产环境如果要审计，**单独挂一个 emptyDir 或 PVC 到 `/tmp`**，或者改成 stdout 后用 K8s 日志收集（Fluentd / Loki / Vector 等）。
 
 ---
 
@@ -247,7 +353,218 @@ ls -ld /var/log/gem/daytona/
 
 ---
 
-## 8. 已知局限
+## 8. JWT 鉴权改造（同事在 daemon 源码上加的接口鉴权）
+
+### 8.1 改了什么
+
+源码目录 `daemon/` 里加了 3 个鉴权中间件文件，修改了 4 个原有文件：
+
+**新增文件（3 个，均在 `daemon/pkg/toolbox/middlewares/`）：**
+
+| 文件 | 作用 |
+|---|---|
+| `auth.go` | gin `JWTAuthMiddleware`；处理 disabled / 白名单 / missing / invalid / 失败状态码 |
+| `jwt_verifier.go` | `JWTVerifier`；负责签名/exp/nbf/iss/aud 校验；支持 HS256/384/512、RS/PS256/384/512、ES256/384/512 |
+| `auth_context.go` | `AuthContext` + 11 个 `AuthResult` 枚举（passed/disabled/skipped/missing_token/invalid_token/invalid_signature/expired/not_yet_valid/invalid_issuer/invalid_audience/misconfigured） |
+
+**修改文件（4 个）：**
+
+| 文件 | 改了什么 |
+|---|---|
+| `daemon/cmd/daemon/config/config.go` | 新增 `AuthConfig` 和 `AccessLogConfig` 结构；新增 `loadAuthConfigFromFile` 按 `$HOME/.daemon/auth.yaml` → `/home/x/.daemon/auth.yaml` → `/etc/daytona/auth.yaml` 顺序加载；envconfig 优先级高于 yaml |
+| `daemon/pkg/toolbox/toolbox.go` | `Server` 结构体加 `AuthConfig` 字段；`Start()` 中条件注册 JWT 中间件 |
+| `daemon/cmd/daemon/main.go` | 构造 `toolbox.Server` 时把 `*config.Config` 注入到 `AuthConfig` |
+| `daemon/pkg/toolbox/middlewares/logging.go` | 重写访问日志签名 `LoggingMiddleware(cfg *daemonconfig.Config)`；按需记录 headers/body/auth；敏感头（authorization/cookie/x-api-key/x-auth-token）值 base64 编码脱敏 |
+| `daemon/go.mod` | 新增 `github.com/golang-jwt/jwt/v5 v5.2.1` |
+| `daemon/Dockerfile`（`x-image-k8s-no-root/Dockerfile` 步骤 14） | 新增 `ENV DAYTONA_AUTH_ENABLED=false`（默认关闭） |
+
+详细鉴权流程参考 `daemon/docs/AUTH.md`。
+
+### 8.2 本地编译这个 daemon
+
+#### 为什么不能直接 `go mod tidy`
+
+`daemon/go.mod` 里 import 了 `github.com/daytonaio/common-go`，但没声明这个依赖——原版是 monorepo，靠 `go.work` workspace 解析。我们这边是从 monorepo 拆出来的子目录，**单跑 `go mod tidy` 会报 `cannot find module providing package github.com/daytonaio/common-go/...`**。
+
+#### 操作步骤
+
+```powershell
+# 1) 把 common-go、computer-use、api-client-go 这 3 个 Go module 拷贝到 x-image-k8s-no-root/libs/
+#    从同事给的完整 daytona_cmb 仓库拷：
+Copy-Item -Recurse 'C:\Users\Walege\Desktop\daytona\cmb_daytona\daytona_cmb\libs\common-go' `
+          'D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root\libs\common-go'
+Copy-Item -Recurse 'C:\Users\Walege\Desktop\daytona\cmb_daytona\daytona_cmb\libs\computer-use' `
+          'D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root\libs\computer-use'
+Copy-Item -Recurse 'C:\Users\Walege\Desktop\daytona\cmb_daytona\daytona_cmb\libs\api-client-go' `
+          'D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root\libs\api-client-go'
+
+# 2) 在 x-image-k8s-no-root/ 下建 go.work（不要再放到 daemon/ 子目录下）
+@"
+go 1.25.4
+
+use (
+    ./daemon
+    ./libs/api-client-go
+    ./libs/common-go
+    ./libs/computer-use
+)
+"@ | Out-File -Encoding utf8 'D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root\go.work'
+
+# 3) build 命令必须在 x-image-k8s-no-root/ 跑（go.work 所在目录），不能再 cd 到 daemon/
+cd D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root
+
+# 4) 设国内代理 + Go 1.25.4 toolchain
+$env:GOPROXY='https://goproxy.cn,direct'
+$env:GOSUMDB='sum.golang.google.cn'
+$env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+
+# 5) 编译（路径前缀必须加 .\daemon\，因为是 workspace 模式）
+#    输出文件名必须是 bin\daytona（不能叫 daytona-new-amd64），
+#    因为 Dockerfile 步骤 9 写死了 COPY bin/daytona /usr/local/bin/daytona。
+#    如果编译到 daytona-new-amd64，build 出来的镜像里 daytona 还是原版，新代码进不去
+go build -ldflags "-X 'github.com/daytonaio/daemon/internal.Version=dev'" `
+         -o bin\daytona .\daemon\cmd\daemon
+
+# 6) 验证覆盖成功
+Get-Item bin\daytona   # 看 LastWriteTime 是刚才
+```
+
+#### Go 版本要求
+
+`daemon/go.mod` 第 3 行写的是 `go 1.25.4`，本地 Go 必须 ≥ 1.25.4。如果低于：
+
+```powershell
+go version   # 看当前版本
+# 升级：去 https://go.dev/dl/ 下载 go1.25.4.windows-amd64.zip
+# 或者让 Go 自动下载 toolchain（不要设 GOTOOLCHAIN=local）
+```
+
+#### 必须修补的代码 bug
+
+同事给过来的 `daemon/pkg/toolbox/middlewares/logging.go` 第 5 行**漏了 import `encoding/base64`**——文件用了 `base64.StdEncoding.EncodeToString` 但没引包，编译会报：
+
+```
+daemon\pkg\toolbox\middlewares\logging.go:141:9: undefined: base64
+```
+
+补上：
+
+```go
+import (
+    "bytes"
+    "encoding/base64"   // ← 加这一行
+    "encoding/json"
+    ...
+)
+```
+
+### 8.3 打镜像 + 测鉴权
+
+```powershell
+cd D:\AIO-GIT\sandbox_base_image\x-image-k8s-no-root
+
+# 打镜像
+docker buildx build --platform=linux/amd64 --progress=plain `
+  -t aio-daytona-x:v2 -f Dockerfile --load .
+
+# 跑起来（带 iss 校验配置）
+docker run -d --security-opt seccomp=unconfined --shm-size=2g `
+  -p 18080:8080 -p 2280:2280 -p 22222:22222 -p 22220:22220 `
+  --name aio-test `
+  -e DAYTONA_AUTH_ENABLED=true `
+  -e DAYTONA_AUTH_VALIDATE_ISSUER=true `
+  -e DAYTONA_AUTH_JWT_ISSUER=https://oidc.idc.cmbchina.cn/ `
+  aio-daytona-x:v2
+
+Start-Sleep -Seconds 30
+
+# 三组测试
+# 1) 白名单放行（/version 在默认白名单里）
+curl.exe http://localhost:18080/version
+# 预期: 200
+
+# 2) 缺 token → 401
+curl.exe -i -X POST http://localhost:18080/process/execute `
+  -H "Content-Type: application/json" -d '{"command":"echo hi"}'
+# 预期: 401 {"error":"unauthorized","reason":"missing id-token header"}
+
+# 3) iss 校验（用 pyjwt 现场签两个 token）
+pip install pyjwt
+python -c "import jwt,time;t=int(time.time());print(jwt.encode({'iss':'https://oidc.idc.cmbchina.cn/','sub':'test','exp':t+3600},'s',algorithm='HS256'));print(jwt.encode({'iss':'https://evil.com/','sub':'test','exp':t+3600},'s',algorithm='HS256'))"
+# 把两个 token 复制出来
+$TOKEN_OK='<iss 对的>'
+$TOKEN_BAD='<iss 错的>'
+
+curl.exe -i -X POST http://localhost:18080/process/execute `
+  -H "Content-Type: application/json" -H "id-token: $TOKEN_OK" `
+  -d '{"command":"echo hi"}'
+# 预期: 不是 401（鉴权通过；业务层可能报 command not found，但鉴权是 OK 的）
+
+curl.exe -i -X POST http://localhost:18080/process/execute `
+  -H "Content-Type: application/json" -H "id-token: $TOKEN_BAD" `
+  -d '{"command":"echo hi"}'
+# 预期: 401 {"error":"unauthorized","reason":"invalid issuer"}
+
+# 看日志确认
+docker exec aio-test tail -f /var/log/gem/daytona/daytona.log | Select-String auth_result
+# 应看到: auth_result=passed / missing_token / invalid_issuer
+```
+
+### 8.4 鉴权配置方式（运行时）
+
+daemon 启动时按以下顺序加载（**配置不可热加载，改完必须 `rollout restart` 或重建容器**）：
+
+| 优先级 | 来源 | 查找路径 |
+|---|---|---|
+| 低 | YAML 配置文件 | `$HOME/.daemon/auth.yaml` → `/home/x/.daemon/auth.yaml` → `/etc/daytona/auth.yaml` |
+| 高 | 环境变量 | `DAYTONA_AUTH_*` |
+
+K8s 推荐用法（配置和镜像解耦）：
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daytona-auth
+data:
+  DAYTONA_AUTH_ENABLED: "true"
+  DAYTONA_AUTH_VALIDATE_ISSUER: "true"
+  DAYTONA_AUTH_JWT_ISSUER: "https://oidc.idc.cmbchina.cn/"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: daytona-auth-secret
+stringData:
+  DAYTONA_AUTH_JWT_SECRET: "your-prod-secret-xxx"
+---
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: daytona
+          image: aio-daytona-x:v2
+          envFrom:
+            - configMapRef: { name: daytona-auth }
+            - secretRef:    { name: daytona-auth-secret }
+```
+
+修改 ConfigMap/Secret 后**必须** `kubectl rollout restart deployment/daytona-daemon` 才会生效——daemon 进程不监听 env 变化。
+
+### 8.5 鉴权行为速查
+
+| `DAYTONA_AUTH_VALIDATE_*` | 默认 | 作用 |
+|---|---|---|
+| `VALIDATE_SIGNATURE` | false | 是否校验 JWT 签名 |
+| `VALIDATE_EXPIRATION` | false | 是否校验 `exp`（过期）/ `nbf`（尚未生效） |
+| `VALIDATE_ISSUER` | false | 是否校验 `iss`（签发方） |
+| `VALIDATE_AUDIENCE` | false | 是否校验 `aud`（接收方） |
+
+⚠️ **安全警告**：`DAYTONA_AUTH_ENABLED=true` 但 4 个 VALIDATE 开关都不开 → daemon 只做 base64 解码 + JSON 解析，**任何人拿任意字符串当 token 都能进**。生产环境**必须**至少开 `VALIDATE_SIGNATURE=true`。
+
+⚠️ **iss 校验有个坑**：配置了 `VALIDATE_ISSUER=true` 但 `jwt_issuer` 留空时，`jwt_verifier.go` 第 207 行的判断是 `if v.cfg.JWTIssuer != "" && iss != v.cfg.JWTIssuer`——**留空就跳过校验**，等于"开了白开"。
 
 - `computer-use` 插件可能会报 `permission denied`——这是 daytona 源码内部的 binary 路径配置问题（跟 Dockerfile 无关）。daemon 看到后会 graceful 降级：`Continuing without computer-use functionality...`，主服务（API/SSH/Pty）不受影响。
 - `BROWSER_EXTRA_ARGS` 里写了公司内网的 Anthropic endpoint 和占位 token——**正式部署前**必须替换成生产值。

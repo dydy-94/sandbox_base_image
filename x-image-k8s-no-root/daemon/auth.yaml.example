@@ -1,0 +1,145 @@
+# Daytona Daemon 本地 JWT 鉴权配置示例
+#
+# 此文件为 Daytona Daemon 的本地 JWT 鉴权配置。
+# 启动时优先加载路径：$HOME/.daemon/auth.yaml
+# 环境变量会覆盖此文件中的值。
+#
+# 详细说明请参考 docs/AUTH.md
+
+# ============================================================
+# 鉴权开关与基础配置
+# ============================================================
+
+# 是否启用本地 JWT 鉴权
+# true:  每次 API 请求都会校验请求头中的 id-token
+# false: 关闭鉴权，所有接口直接放行
+# 环境变量: DAYTONA_AUTH_ENABLED (true / false，默认 false)
+enabled: false
+
+# 携带 token 的请求头名
+# 默认值: id-token
+# 环境变量: DAYTONA_AUTH_ID_TOKEN_HEADER
+id_token_header: "id-token"
+
+# ============================================================
+# 校验项开关（按需启用，默认全部关闭）
+# ============================================================
+#
+# 重要：以下四项校验默认全部为 false，开启哪几项由环境变量决定。
+# 这样可以做到"只解析 JWT、不断言其有效性"——业务层可以读取 claims 自行处理。
+# 推荐至少开启 validate_signature，否则任意人能伪造 token。
+
+# 是否校验 JWT 签名（默认 false）
+# true:  校验签名（必须同时配置 jwt_algorithm + jwt_secret / jwt_public_key）
+# false: 跳过签名校验，token 在网络层面不可信
+# 环境变量: DAYTONA_AUTH_VALIDATE_SIGNATURE
+validate_signature: false
+
+# 是否校验 token 有效期（exp / nbf，默认 false）
+# true:  校验 exp（过期）和 nbf（尚未生效）
+# false: 不校验时间
+# 环境变量: DAYTONA_AUTH_VALIDATE_EXPIRATION
+validate_expiration: false
+
+# 是否校验 iss 声明（默认 false）
+# true:  校验签发方（必须同时配置 jwt_issuer）
+# false: 不校验
+# 环境变量: DAYTONA_AUTH_VALIDATE_ISSUER
+validate_issuer: false
+
+# 是否校验 aud 声明（默认 false）
+# true:  校验接收方（必须同时配置 jwt_audience）
+# false: 不校验
+# 环境变量: DAYTONA_AUTH_VALIDATE_AUDIENCE
+validate_audience: false
+
+# ============================================================
+# JWT 签名配置（仅在 validate_signature=true 时使用）
+# ============================================================
+
+# JWT 签名算法
+# 对称算法:  HS256 / HS384 / HS512（需配置 jwt_secret）
+# 非对称算法: RS256 / RS384 / RS512 / ES256 / ES384 / ES512（需配置 jwt_public_key）
+# 默认值: HS256
+# 环境变量: DAYTONA_AUTH_JWT_ALGORITHM
+jwt_algorithm: "HS256"
+
+# 对称算法（HS*）使用的共享密钥
+# 当 jwt_algorithm 为 HS* 时必填
+# 环境变量: DAYTONA_AUTH_JWT_SECRET
+#
+# 生产环境请使用高强度密钥（推荐至少 32 字节随机字符串）
+jwt_secret: "please-change-this-to-a-strong-secret-in-production"
+
+# 非对称算法（RS*/ES*）使用的公钥
+# 当 jwt_algorithm 为 RS*/ES* 时必填
+# 支持两种形式：
+#   1. 直接写 PEM 内容（多行字符串用 | 保留换行）
+#   2. 用 "@/path/to/key.pem" 引用文件路径
+# 环境变量: DAYTONA_AUTH_JWT_PUBLIC_KEY
+#
+# 示例（注释掉，使用时请取消注释并填入真实公钥）:
+# jwt_public_key: |
+#   -----BEGIN PUBLIC KEY-----
+#   MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxxxxx
+#   -----END PUBLIC KEY-----
+jwt_public_key: ""
+
+# 期望的 iss 声明（签发方）
+# 仅在 validate_issuer=true 时使用；留空表示不校验具体值
+# 环境变量: DAYTONA_AUTH_JWT_ISSUER
+jwt_issuer: ""
+
+# 期望的 aud 声明（接收方）
+# 仅在 validate_audience=true 时使用；留空表示不校验具体值
+# 环境变量: DAYTONA_AUTH_JWT_AUDIENCE
+jwt_audience: ""
+
+# 时钟偏移容忍（秒）
+# 用于缓解 daemon 与签发方主机时间不完全一致的问题
+# 仅在 validate_expiration=true 时使用
+# 默认值: 30
+# 环境变量: DAYTONA_AUTH_CLOCK_SKEW_SEC
+clock_skew_sec: 30
+
+# ============================================================
+# 路径白名单与失败处理
+# ============================================================
+
+# 不需要鉴权的路径白名单（这些路径会直接放行）
+# 鉴权关闭时（enabled=false）此配置无效
+# 环境变量: DAYTONA_AUTH_EXCLUDE_PATHS（多个用逗号分隔）
+# 默认白名单包含：/version, /health, /user-home-dir, /work-dir
+exclude_paths:
+  - /version
+  - /health
+  - /user-home-dir
+  - /work-dir
+
+# 鉴权失败时返回的状态码
+# 环境变量: DAYTONA_AUTH_FAILURE_STATUS (默认 401)
+failure_status: 401
+
+# ============================================================
+# 访问日志详细度配置
+# ============================================================
+#
+# 注意：以下字段是 access_log 段的子字段，请勿在最外层直接使用。
+# 配置示例见文件末尾的 access_log 段。
+
+# 不记录访问日志的路径
+# 环境变量: DAYTONA_ACCESS_LOG_EXCLUDE_PATHS（多个用逗号分隔）
+
+# ============================================================
+# 完整 access_log 段示例
+# 如需开启访问日志详细记录，请把下面整段取消注释并按需调整：
+# ============================================================
+#
+# access_log:
+#   log_headers: true       # 是否记录请求头
+#   log_body: false         # 是否记录请求体
+#   log_auth: true          # 是否记录鉴权拦截详情
+#   body_max_size: 4096     # 请求体最大记录字节数
+#   exclude_paths:          # 不记录访问日志的路径
+#     - /version
+#     - /health
