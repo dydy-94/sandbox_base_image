@@ -1,0 +1,16 @@
+# 排除构建脚本和文档
+build/
+*.md
+*.tar
+.git/
+.gitkeep
+*.log
+
+# 排除开发文件
+cmd/
+pkg/
+internal/
+tools/
+*.go
+*.mod
+*.sum
