@@ -12,8 +12,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/x \
     NPM_CONFIG_PREFIX=/home/x/.npm-global \
     NPM_CONFIG_CACHE=/home/x/.npm \
+    PM2_HOME=/home/x/.pm2 \
     PATH=/home/x/.npm-global/bin:/home/x/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    ANTHROPIC_BASE_URL=http://127.0.0.1:3456\
+    ANTHROPIC_BASE_URL=http://127.0.0.1:3456 \
     ANTHROPIC_MODEL=CMB_Model \
     ANTHROPIC_SMALL_FAST_MODEL=CMB_Model \
     CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70 \
@@ -54,7 +55,7 @@ RUN apt-get update && apt-get install -y \
  && apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
  && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
  && curl -sS https://bootstrap.pypa.io/get-pip.py | python${PYTHON_VERSION} \
- && pip install playwright supervisor fastmcp cffi cryptography\
+ && pip install playwright supervisor fastmcp cffi cryptography \
  && curl -LO "https://github.com/oras-project/oras/releases/download/v1.3.1/oras_1.3.1_linux_amd64.tar.gz" \
  && mkdir -p oras-install \
  && tar -zxf oras_1.3.1_linux_amd64.tar.gz -C oras-install \
@@ -103,7 +104,7 @@ RUN npm install -g \
       @anthropic-ai/claude-code@2.1.63 \
       @anthropic-ai/claude-agent-sdk@0.2.63 \
       @musistudio/claude-code-router \
-      pm2 \
+      pm2@7.0.3 \
  && chown -R x:x /home/x 
 
 #######################################
@@ -140,11 +141,29 @@ RUN chmod +x /usr/local/bin/daytona && \
 #######################################
 RUN mkdir -p /home/x/.daemon/state && \
     mkdir -p /home/x/.daemon/logs && \
+    mkdir -p /home/x/.daemon/events && \
+    mkdir -p /home/x/.daemon/locks && \
+    mkdir -p /home/x/.daemon/apps && \
+    mkdir -p /home/x/.daemon/work && \
+    mkdir -p /home/x/.data && \
+    mkdir -p /home/x/.pm2 && \
+    mkdir -p /home/x/tmp && \
     mkdir -p /tmp/daytona-logs && \
     mkdir -p /var/log/gem/daytona && \
     chown -R x:x /home/x/.daemon && \
     chown x:x /tmp/daytona-logs && \
     chown -R x:x /var/log/gem/daytona
+
+#######################################
+# 10b. 内置基础 Guard 程序体（不内置 config.json）
+#######################################
+COPY guard/ /home/x/.daemon/
+COPY supervisord/ /opt/gem/supervisord/
+RUN rm -f /home/x/.daemon/config.json \
+ && chmod +x /home/x/.daemon/sandbox_guard.py \
+ && find /home/x/.daemon/scripts -type f -name "*.py" -exec chmod +x {} \; \
+ && chown -R x:x /home/x/.daemon /home/x/.data /home/x/.pm2 /home/x/tmp \
+ && test ! -e /home/x/.daemon/config.json
 
 #######################################
 # 11. 复制 computer-use 插件 (预编译)

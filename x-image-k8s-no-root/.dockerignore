@@ -1,0 +1,10 @@
+.git
+.gitignore
+.guard-payload
+build
+daemon
+libs
+root-daemon-version
+README.md
+go.work
+go.work.sum
