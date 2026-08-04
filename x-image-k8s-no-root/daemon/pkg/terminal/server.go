@@ -9,7 +9,9 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/daytonaio/daemon/pkg/common"
 	"github.com/gorilla/websocket"
@@ -26,7 +28,7 @@ type windowSize struct {
 	Cols uint16 `json:"cols"`
 }
 
-func StartTerminalServer(port int) error {
+func StartTerminalServer(port int, onReady func(elapsed time.Duration)) error {
 	// Prepare the embedded frontend files
 	// Serve the files from the embedded filesystem
 	staticFS, err := fs.Sub(static, "static")
@@ -39,7 +41,17 @@ func StartTerminalServer(port int) error {
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("Starting terminal server on http://localhost%s", addr)
-	return http.ListenAndServe(addr, nil)
+
+	// 拆出 Listen 步骤以便精准测量"到监听成功"的耗时
+	listenStart := time.Now()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	if onReady != nil {
+		onReady(time.Since(listenStart))
+	}
+	return http.Serve(listener, nil)
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {

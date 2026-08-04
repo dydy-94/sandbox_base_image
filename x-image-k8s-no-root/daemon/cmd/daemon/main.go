@@ -25,6 +25,9 @@ import (
 )
 
 func main() {
+	// 进程启动时间戳，用于统计各初始化阶段耗时
+	processStart := time.Now()
+
 	c, err := config.GetConfig()
 	if err != nil {
 		panic(err)
@@ -49,6 +52,8 @@ func main() {
 	}
 
 	initLogs(logWriter)
+
+	log.Infof("config loaded in %s", time.Since(processStart))
 
 	// If workdir in image is not set, use user home as workdir
 	if c.UserHomeAsWorkDir {
@@ -113,22 +118,34 @@ func main() {
 		panic(fmt.Errorf("failed to get current working directory: %w", err))
 	}
 
+	// 收集 3 个服务 Listen 成功的信号，用于统计整体初始化耗时
+	readyChan := make(chan struct{}, 3)
+
+	// 初始化总耗时阈值（秒）：超过此值打 Error 日志 + [INIT_SLOW] 前缀 + init_slow=true 字段
+	const initSlowThreshold = 40 * time.Second
+
 	toolBoxServer := &toolbox.Server{
 		WorkDir:    workDir,
 		AuthConfig: c,
+		OnReady: func(name string, elapsed time.Duration) {
+			log.Infof("%s listen ready in %s", name, elapsed)
+			readyChan <- struct{}{}
+		},
 	}
 
 	// Start the toolbox server in a go routine
 	go func() {
-		err := toolBoxServer.Start()
-		if err != nil {
+		if err := toolBoxServer.Start(); err != nil {
 			errChan <- err
 		}
 	}()
 
 	// Start terminal server
 	go func() {
-		if err := terminal.StartTerminalServer(22222); err != nil {
+		if err := terminal.StartTerminalServer(22222, func(elapsed time.Duration) {
+			log.Infof("terminal listen ready in %s", elapsed)
+			readyChan <- struct{}{}
+		}); err != nil {
 			errChan <- err
 		}
 	}()
@@ -136,10 +153,28 @@ func main() {
 	sshServer := &ssh.Server{
 		WorkDir:        workDir,
 		DefaultWorkDir: workDir,
+		OnReady: func(elapsed time.Duration) {
+			log.Infof("ssh listen ready in %s", elapsed)
+			readyChan <- struct{}{}
+		},
 	}
 	go func() {
 		if err := sshServer.Start(); err != nil {
 			errChan <- err
+		}
+	}()
+
+	// 等待 3 个服务全部 Listen 成功，统计总耗时；超过 40s 打 Error 日志带 [INIT_SLOW] 前缀
+	go func() {
+		for i := 0; i < 3; i++ {
+			<-readyChan
+		}
+		total := time.Since(processStart)
+		if total > initSlowThreshold {
+			log.WithField("init_slow", true).
+				Errorf("[DAEMON_INIT_SLOW] all servers ready in %s (threshold %s exceeded)", total, initSlowThreshold)
+		} else {
+			log.Infof("all servers ready in %s", total)
 		}
 	}()
 
@@ -217,7 +252,9 @@ func main() {
 }
 
 func initLogs(logWriter io.Writer) {
-	logLevel := log.WarnLevel
+	// 默认日志级别改为 Info，确保启动 banner、鉴权配置、访问日志等信息默认可见。
+	// 通过 LOG_LEVEL 环境变量仍可覆盖（支持 trace/debug/info/warn/error/fatal/panic）。
+	logLevel := log.InfoLevel
 
 	logLevelEnv, logLevelSet := os.LookupEnv("LOG_LEVEL")
 

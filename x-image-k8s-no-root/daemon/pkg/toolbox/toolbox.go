@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"time"
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
 	common_proxy "github.com/daytonaio/common-go/pkg/proxy"
@@ -46,6 +47,9 @@ type Server struct {
 	WorkDir     string
 	ComputerUse computeruse.IComputerUse
 	AuthConfig  *daemonconfig.Config
+
+	// OnReady 可选回调：当 Listen 成功时调用，参数为服务名和从 Start 入口到 Listen 成功的耗时
+	OnReady func(name string, elapsed time.Duration)
 }
 
 type WorkDirResponse struct {
@@ -353,6 +357,9 @@ func (s *Server) Start() error {
 
 	go portDetector.Start(context.Background())
 
+	// 记录本函数入口时间，用于上报 Listen 成功耗时
+	listenStart := time.Now()
+
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.TOOLBOX_API_PORT),
 		Handler: r,
@@ -364,6 +371,12 @@ func (s *Server) Start() error {
 	listener, err := net.Listen("tcp", httpServer.Addr)
 	if err != nil {
 		return err
+	}
+
+	// 监听成功：把"从本函数入口到 Listen 成功"的耗时通过 ready 信号上报给 main，
+	// 便于在 main 侧做整体初始化耗时统计和阈值告警。
+	if s.OnReady != nil {
+		s.OnReady("toolbox", time.Since(listenStart))
 	}
 
 	return httpServer.Serve(listener)

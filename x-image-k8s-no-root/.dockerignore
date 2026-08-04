@@ -1,0 +1,25 @@
+# 不进入镜像构建的目录/文件
+# 这些目录是本地开发用的（重编译 daemon、go.work 依赖等），不需要发给 docker daemon
+daemon/
+libs/
+go.work
+go.work.sum
+
+# 旧版 Dockerfile（仅作参考对比）
+root-daemon-version/
+
+# 项目文档
+README.md
+
+# Git 元数据
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+
+# OS 临时
+.DS_Store
+Thumbs.db

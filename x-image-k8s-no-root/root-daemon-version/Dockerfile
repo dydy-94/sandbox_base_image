@@ -136,7 +136,7 @@ RUN mkdir -p /home/x/.daemon/state && \
 #######################################
 
 RUN mkdir -p /usr/local/lib/daytona-computer-use
-COPY dist/libs/computer-use-amd64 /usr/local/lib/daytona-computer-use/daytona-computer-use
+COPY dist/libs/computer-use-amd64  /usr/local/lib/daytona-computer-use/daytona-computer-use
 RUN chmod 755 /usr/local/lib/daytona-computer-use/daytona-computer-use && \
     chown x:x /usr/local/lib/daytona-computer-use/daytona-computer-use
 

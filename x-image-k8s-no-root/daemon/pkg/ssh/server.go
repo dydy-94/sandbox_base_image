@@ -6,8 +6,10 @@ package ssh
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/daytonaio/daemon/pkg/common"
 	"github.com/daytonaio/daemon/pkg/ssh/config"
@@ -29,6 +31,9 @@ func min(a, b int) int {
 type Server struct {
 	WorkDir        string
 	DefaultWorkDir string
+
+	// OnReady 可选回调：当 Listen 成功时调用，参数为从 Start 入口到 Listen 成功的耗时
+	OnReady func(elapsed time.Duration)
 }
 
 func (s *Server) Start() error {
@@ -103,7 +108,17 @@ func (s *Server) Start() error {
 	}
 
 	log.Printf("Starting ssh server on port %d...\n", config.SSH_PORT)
-	return sshServer.ListenAndServe()
+
+	// 拆出 Listen 步骤以便精准测量"到监听成功"的耗时
+	listenStart := time.Now()
+	listener, err := net.Listen("tcp", sshServer.Addr)
+	if err != nil {
+		return err
+	}
+	if s.OnReady != nil {
+		s.OnReady(time.Since(listenStart))
+	}
+	return sshServer.Serve(listener)
 }
 
 func (s *Server) handlePty(session ssh.Session, ptyReq ssh.Pty, winCh <-chan ssh.Window) {
