@@ -200,16 +200,42 @@ def _is_bootstrap_upgrade_runner() -> bool:
     return bool(str(os.environ.get("SANDBOX_GUARD_BOOTSTRAP_STARTED_AT_MS", "")).strip())
 
 
-def schedule_upgrade(cfg_path: str, proc_name: str, target_version: str) -> None:
+def schedule_upgrade(
+    cfg_path: str,
+    proc_name: str,
+    target_version: str,
+    *,
+    independent_session: bool = False,
+) -> subprocess.Popen[Any]:
     """异步拉起 upgrade-runner 子进程。"""
     script = Path(__file__).resolve().parent.parent.parent / "sandbox_guard.py"
+    argv = [
+        sys.executable,
+        str(script),
+        "upgrade-runner",
+        "--config",
+        cfg_path,
+        "--process",
+        proc_name,
+        "--target-version",
+        target_version,
+    ]
+    log("info", "upgrade.schedule", "准备触发升级任务", process=proc_name, target_version=target_version)
+    if independent_session:
+        return subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env=prepare_async_child_env(),
+        )
+
+    # legacy 与 daemon 调度路径保持原有 shell 子进程语义，避免影响存量镜像。
     cmd = (
         f"{shlex_quote(sys.executable)} {shlex_quote(str(script))} "
         f"upgrade-runner --config {shlex_quote(cfg_path)} "
         f"--process {shlex_quote(proc_name)} --target-version {shlex_quote(target_version)}"
     )
-    log("info", "upgrade.schedule", "准备触发升级任务", process=proc_name, target_version=target_version)
-    subprocess.Popen(cmd, shell=True, env=prepare_async_child_env())
+    return subprocess.Popen(cmd, shell=True, env=prepare_async_child_env())
 
 
 def _upgrade_lock_file(cfg: dict[str, Any], proc_name: str) -> str:

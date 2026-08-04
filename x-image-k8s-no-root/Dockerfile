@@ -160,6 +160,8 @@ RUN mkdir -p /home/x/.daemon/state && \
 COPY guard/ /home/x/.daemon/
 COPY supervisord/ /opt/gem/supervisord/
 RUN rm -f /home/x/.daemon/config.json \
+ && find /home/x/.daemon -type d -name __pycache__ -prune -exec rm -rf {} + \
+ && find /home/x/.daemon -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete \
  && chmod +x /home/x/.daemon/sandbox_guard.py \
  && find /home/x/.daemon/scripts -type f -name "*.py" -exec chmod +x {} \; \
  && chown -R x:x /home/x/.daemon /home/x/.data /home/x/.pm2 /home/x/tmp \

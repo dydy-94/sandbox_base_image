@@ -58,7 +58,10 @@ def log(level: str, event: str, message: str, **kwargs: Any) -> None:
     line = json.dumps(payload, ensure_ascii=False)
     pid1_only = os.environ.get(LOG_TO_PID1_ONLY_ENV, "").strip() == "1"
     if not pid1_only:
-        print(line, file=stream, flush=True)
+        try:
+            print(line, file=stream, flush=True)
+        except (BrokenPipeError, OSError):
+            pass
     mirrored = False
     # 仅在显式开启时镜像到容器 PID1，避免 daemon 在 supervisor 下重复日志。
     if os.environ.get(MIRROR_PID1_ENV, "").strip() == "1":
@@ -70,7 +73,11 @@ def log(level: str, event: str, message: str, **kwargs: Any) -> None:
         except Exception:
             pass
     if pid1_only and not mirrored:
-        print(line, file=stream, flush=True)
+        try:
+            print(line, file=stream, flush=True)
+        except (BrokenPipeError, OSError):
+            # 日志通道失效不能中断升级、事件落盘或进程守护。
+            pass
 
 
 def prepare_async_child_env(env: dict[str, str] | None = None) -> dict[str, str]:

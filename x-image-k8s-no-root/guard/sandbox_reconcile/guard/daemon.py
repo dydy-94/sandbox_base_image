@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from .common import FileLock, load_json, log, now_iso, run_command, write_json_atomic
 from .config import apply_defaults, read_config, validate_config
+from .env_store import restore_env_cache_to_process
 from .pm2_log_cleanup import reconcile_pm2_log_cleanup
 from .presentation import daemon_cycle_summary
 from .reconcile.env import reconcile_env
@@ -238,6 +239,18 @@ def run_daemon_loop(
     except Exception:
         # 首次读取失败时保持默认锁和间隔，后续在每轮内部继续尝试。
         pass
+    else:
+        try:
+            restored = restore_env_cache_to_process(cfg)
+            log(
+                "info",
+                "daemon.env.restored",
+                "daemon 启动时已恢复 service 环境变量",
+                restored_env_keys=restored,
+            )
+        except Exception as exc:
+            # 环境元信息恢复是 best-effort；失败不影响 daemon 巡检和上报从缓存单独取值。
+            log("warn", "daemon.env.restore_failed", "daemon 恢复 service 环境变量失败，继续启动", error=str(exc))
 
     try:
         with FileLock(lock_path):

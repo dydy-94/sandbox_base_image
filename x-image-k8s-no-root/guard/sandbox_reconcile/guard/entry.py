@@ -16,7 +16,6 @@ from .env_store import bootstrap_lock_file, restore_env_cache_to_process
 from .runtime_permissions import ensure_rootless_runtime_dirs
 from .self_update import ensure_guard_version
 from .startup_timing import initialize_startup_timing_for_bootstrap
-from .strategy.pm2 import cleanup_rootless_pm2_anchor
 
 
 def _prepare_entry_env(
@@ -75,7 +74,6 @@ def run_bootstrap_entry(
                 source=os.environ.get("SANDBOX_GUARD_BOOTSTRAP_SOURCE", "manual"),
                 restored_env_keys=restored,
             )
-            cleanup_rootless_pm2_anchor(cfg)
             result = ensure_guard_version(cfg, requested_target_version=target_version)
             if result.ok and result.updated:
                 log("info", "bootstrap.entry.guard_updated", "启动前 guard 更新完成，切换到新版本继续启动", target_version=result.target_version)

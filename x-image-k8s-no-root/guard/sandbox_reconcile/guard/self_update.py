@@ -14,6 +14,7 @@ from typing import Any
 from .common import file_hash, log, run_command, shlex_quote
 from .constants import APP_VERSION
 from .paths import root_path, runtime_root_dir
+from .runtime_permissions import ensure_rootless_self_update_permissions
 from .runtime_profile import is_rootless_profile
 
 
@@ -269,6 +270,7 @@ def ensure_guard_version(
             return GuardUpdateResult(False, False, target_version, f"bundle extract failed: {exc}")
 
         try:
+            ensure_rootless_self_update_permissions(cfg)
             _replace_runtime_entry(stage_dir, runtime_root, "sandbox_guard.py")
             _replace_runtime_entry(stage_dir, runtime_root, "sandbox_reconcile")
             _replace_runtime_entry(stage_dir, runtime_root, "scripts")

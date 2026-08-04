@@ -25,6 +25,7 @@ from .runtime_profile import is_rootless_profile
 from .runtime_permissions import ensure_rootless_runtime_dirs
 from .skills import append_bootstrap_skill_request
 from .state import build_base_state, finalize_overall_status
+from .strategy.pm2 import cleanup_rootless_pm2_anchor
 from .xagent_activity_notify import initialize_xagent_activity_notify
 
 
@@ -382,6 +383,40 @@ def _prewarm_resource_sample(cfg: dict[str, Any], state: dict[str, Any], prev: d
         log("warn", "bootstrap.resources.prewarm_failed", "bootstrap 资源采样预热失败", error=str(exc))
 
 
+def _wait_for_rootless_xagent_runner(
+    cfg: dict[str, Any],
+    state: dict[str, Any],
+    runner: subprocess.Popen[Any] | None,
+) -> None:
+    """保持一次性 launcher 存活，直到 rootless xagent 升级任务结束。"""
+    if not is_rootless_profile(cfg) or runner is None:
+        return
+    started_at = time.monotonic()
+    while True:
+        try:
+            returncode = runner.wait(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            # 防止已有 daemon 将长升级误判为陈旧 bootstrap 后并发接管。
+            state["last_cycle_time"] = now_iso()
+            try:
+                write_json_atomic(str(cfg["runtime"]["state_file"]), state)
+            except Exception as exc:
+                log(
+                    "warn",
+                    "bootstrap.xagent_runner.heartbeat_failed",
+                    "等待 xagent upgrade-runner 时刷新 bootstrap 状态失败",
+                    error=str(exc),
+                )
+    log(
+        "info" if returncode == 0 else "warn",
+        "bootstrap.xagent_runner.exit",
+        "bootstrap 等待 xagent upgrade-runner 结束",
+        returncode=returncode,
+        duration_seconds=round(time.monotonic() - started_at, 3),
+    )
+
+
 def run_bootstrap(
     cfg: dict[str, Any],
     cfg_path: str,
@@ -424,10 +459,12 @@ def run_bootstrap(
             **env_log_data,
         )
         _run_bootstrap_scripts(cfg, state)
-        bootstrap_processes(cfg, cfg_path, state, prev, run_command)
+        scheduled_runners = bootstrap_processes(cfg, cfg_path, state, prev, run_command)
         _prewarm_resource_sample(cfg, state, prev)
         write_json_atomic(state_file, state)
 
+        _wait_for_rootless_xagent_runner(cfg, state, scheduled_runners.get("xagent"))
+        cleanup_rootless_pm2_anchor(cfg, timeout_seconds=5)
         _start_daemon(cfg)
         _append_bootstrap_skill_sync_request(cfg)
 

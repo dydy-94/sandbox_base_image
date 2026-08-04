@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import subprocess
 import time
 from typing import Any
 
 from ..common import log, now_iso, shlex_quote
 from ..env_store import load_env_requests, remove_consumed_env_requests
 from ..process_applicability import inapplicable_process_state, process_is_applicable
+from ..runtime_profile import is_rootless_profile
 from ..strategy.factory import get_strategy
 from ..upgrade import load_upgrade_events, load_upgrade_requests, schedule_upgrade
 from ..types import CommandResult
@@ -729,8 +731,9 @@ def bootstrap_processes(
     state: dict[str, Any],
     prev_state: dict[str, Any],
     run_command_func,
-) -> None:
+) -> dict[str, subprocess.Popen[Any]]:
     """bootstrap 阶段进程处理：启动 + 温柔升级触发。"""
+    scheduled_runners: dict[str, subprocess.Popen[Any]] = {}
     total = 0
     online = 0
     degraded = 0
@@ -823,7 +826,16 @@ def bootstrap_processes(
             rec["last_action_result"] = "success"
             rec["last_action_at"] = now_iso()
             rec["meta_last_check_at"] = now_iso()
-            schedule_upgrade(cfg_path, name, "auto")
+            if is_rootless_profile(cfg):
+                runner = schedule_upgrade(
+                    cfg_path,
+                    name,
+                    "auto",
+                    independent_session=True,
+                )
+            else:
+                runner = schedule_upgrade(cfg_path, name, "auto")
+            scheduled_runners[name] = runner
             effective_upgrade_states[name] = "upgrading"
             upgrading += 1
             processes_payload[name] = rec
@@ -905,6 +917,7 @@ def bootstrap_processes(
     state["summary"]["process_degraded"] = degraded
     state["summary"]["process_upgrading"] = upgrading
     state["summary"]["process_failed"] = failed
+    return scheduled_runners
 
 
 def reconcile_processes(

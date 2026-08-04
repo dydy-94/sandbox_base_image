@@ -346,7 +346,7 @@ class PM2Strategy(ProcessManagerStrategy):
         return self._run_pm2_command(f"pm2 delete {name}", cfg)
 
 
-def cleanup_rootless_pm2_anchor(cfg: dict[str, Any]) -> bool:
+def cleanup_rootless_pm2_anchor(cfg: dict[str, Any], *, timeout_seconds: float = 5.0) -> bool:
     """删除 pm2-runtime 初始化占位项；socket 未就绪时绝不触发 PM2 daemonize。"""
     if not is_rootless_profile(cfg):
         return True
@@ -356,7 +356,21 @@ def cleanup_rootless_pm2_anchor(cfg: dict[str, Any]) -> bool:
         return False
     supervisor = ((cfg.get("runtime", {}) or {}).get("supervisor", {}) or {})
     anchor = str(supervisor.get("pm2_anchor_process") or "sandbox-pm2-anchor")
-    result = strategy._run_pm2_command(f"pm2 delete {shlex_quote(anchor)}", cfg, timeout_seconds=30)
+    try:
+        result = strategy._run_pm2_command(
+            f"pm2 delete {shlex_quote(anchor)}",
+            cfg,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        log(
+            "warn",
+            "pm2.runtime.anchor_cleanup_failed",
+            "rootless PM2 runtime anchor 清理异常",
+            process=anchor,
+            error=str(exc),
+        )
+        return False
     if result.returncode == 0 or strategy._pm2_delete_not_found(result):
         log("info", "pm2.runtime.anchor_cleaned", "rootless PM2 runtime anchor 已清理", process=anchor)
         return True
