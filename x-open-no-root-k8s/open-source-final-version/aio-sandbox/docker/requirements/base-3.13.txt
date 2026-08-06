@@ -1,0 +1,4 @@
+# MINIMAL build: user-plane Python (python3) intentionally empty.
+# All non-stdlib packages are available via uv in the running container if
+# needed; we don't pre-install anything to keep the image small.
+# Uncomment packages below if you want them baked into the base interpreter.

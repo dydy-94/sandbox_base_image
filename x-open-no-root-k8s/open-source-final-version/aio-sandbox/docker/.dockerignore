@@ -1,0 +1,11 @@
+# Reference-only files (not needed inside the build)
+*.md
+
+# Junk that should never enter the build context
+**/.git
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/build
+**/*.egg-info

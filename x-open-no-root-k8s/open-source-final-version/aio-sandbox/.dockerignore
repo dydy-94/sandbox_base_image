@@ -1,0 +1,20 @@
+# Build context exclusions (saves tar + upload time)
+# Everything not strictly required by the Dockerfile should be excluded.
+
+# Other top-level projects
+aio-sandbox-code-browser-mini
+cli
+
+# Build artifacts
+node_modules
+.git
+.gitignore
+.DS_Store
+*.pyc
+__pycache__
+*.log
+*.tmp
+
+# Large assets that aren't used in build (keep only what docker/context/X has)
+guard/scripts/skill/batchUpdate.sh
+guard/.cache

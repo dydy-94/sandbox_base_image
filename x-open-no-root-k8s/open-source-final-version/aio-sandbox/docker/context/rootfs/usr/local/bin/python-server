@@ -1,0 +1,3 @@
+#!/bin/bash
+exec /opt/server-venv/bin/python \
+    /opt/server-venv/lib/python3/site-packages/app/cli.py "$@"

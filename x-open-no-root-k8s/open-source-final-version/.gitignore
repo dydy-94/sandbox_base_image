@@ -1,0 +1,213 @@
+# ============================================================================
+# .gitignore for aio-sandbox final-version
+# ----------------------------------------------------------------------------
+# Strategy: keep ONLY source code, scripts, configs and READMEs in git.
+#         All large pre-downloaded assets are ignored. Contributors (and CI)
+#         regenerate them locally by running:
+#
+#             bash aio-sandbox/docker/context/prepare-all.sh
+#
+# before their first build. The script fetches from CN mirrors with upstream
+# fallbacks (see each prepare-*.sh for individual URL lists).
+#
+# This keeps the git repo < 10 MB even though the working tree is ~3 GB.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# OS / editor junk
+# ----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.vs/
+
+# ----------------------------------------------------------------------------
+# Logs and build artifacts
+# ----------------------------------------------------------------------------
+*.log
+*.tar.gz
+*.tgz
+*.tar
+*.zip
+*.lock
+build-*.log
+build/
+.cache/
+.tmp/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.pid
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.tox/
+.pytest_cache/
+.coverage
+.coverage.*
+
+# Node
+node_modules/
+.npm/
+.eslintcache
+.parcel-cache/
+
+# Rust
+target/
+Cargo.lock.bak
+
+# Go
+*.test
+*.out
+vendor/
+
+# ----------------------------------------------------------------------------
+# Per-variant ignored assets
+# ----------------------------------------------------------------------------
+# Each aio-sandbox*/docker/context/<dir> below is the *offline cache* that
+# prepare-*.sh scripts rebuild from CN mirrors. Skip the files, keep the
+# .keep / .gitkeep markers so the directories survive empty.
+
+# ---- AIO mainline variant ----
+aio-sandbox/docker/context/apt-archives/*
+!aio-sandbox/docker/context/apt-archives/.gitkeep
+!aio-sandbox/docker/context/apt-archives/.keep
+
+aio-sandbox/docker/context/wheels/*
+!aio-sandbox/docker/context/wheels/.gitkeep
+!aio-sandbox/docker/context/wheels/.keep
+
+aio-sandbox/docker/context/npm-tgz/
+!aio-sandbox/docker/context/npm-tgz/.gitkeep
+!aio-sandbox/docker/context/npm-tgz/.keep
+# keep npm-tgz/*/.gitkeep (in subdirs) so the structure stays
+
+aio-sandbox/docker/context/chrome-deb/*
+!aio-sandbox/docker/context/chrome-deb/.gitkeep
+!aio-sandbox/docker/context/chrome-deb/.keep
+
+aio-sandbox/docker/context/novnc/
+!aio-sandbox/docker/context/novnc/.gitkeep
+!aio-sandbox/docker/context/novnc/.keep
+
+aio-sandbox/docker/context/websocat/*
+!aio-sandbox/docker/context/websocat/.gitkeep
+!aio-sandbox/docker/context/websocat/.keep
+
+aio-sandbox/docker/context/rustup-pre/*
+!aio-sandbox/docker/context/rustup-pre/.gitkeep
+!aio-sandbox/docker/context/rustup-pre/.keep
+
+aio-sandbox/docker/context/cargo-vendored/
+!aio-sandbox/docker/context/cargo-vendored/.gitkeep
+!aio-sandbox/docker/context/cargo-vendored/.keep
+
+aio-sandbox/docker/context/bin/*
+!aio-sandbox/docker/context/bin/.gitkeep
+!aio-sandbox/docker/context/bin/.keep
+# EXCEPT: keep daytona (71MB) and computer-use-amd64? NO — both come from
+# upstream GitHub releases via prepare-daytona.sh, ignore them in git.
+
+aio-sandbox/docker/context/dist/
+!aio-sandbox/docker/context/dist/.gitkeep
+!aio-sandbox/docker/context/dist/.keep
+
+# ---- AIO code-browser-mini variant ----
+# Same pattern repeated for the second variant
+aio-sandbox-code-browser-mini/docker/context/apt-archives/*
+!aio-sandbox-code-browser-mini/docker/context/apt-archives/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/apt-archives/.keep
+
+aio-sandbox-code-browser-mini/docker/context/wheels/*
+!aio-sandbox-code-browser-mini/docker/context/wheels/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/wheels/.keep
+
+aio-sandbox-code-browser-mini/docker/context/npm-tgz/
+!aio-sandbox-code-browser-mini/docker/context/npm-tgz/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/npm-tgz/.keep
+
+aio-sandbox-code-browser-mini/docker/context/chrome-deb/*
+!aio-sandbox-code-browser-mini/docker/context/chrome-deb/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/chrome-deb/.keep
+
+aio-sandbox-code-browser-mini/docker/context/novnc/
+!aio-sandbox-code-browser-mini/docker/context/novnc/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/novnc/.keep
+
+aio-sandbox-code-browser-mini/docker/context/websocat/*
+!aio-sandbox-code-browser-mini/docker/context/websocat/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/websocat/.keep
+
+aio-sandbox-code-browser-mini/docker/context/rustup-pre/*
+!aio-sandbox-code-browser-mini/docker/context/rustup-pre/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/rustup-pre/.keep
+
+aio-sandbox-code-browser-mini/docker/context/cargo-vendored/
+!aio-sandbox-code-browser-mini/docker/context/cargo-vendored/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/cargo-vendored/.keep
+
+aio-sandbox-code-browser-mini/docker/context/code-server/
+!aio-sandbox-code-browser-mini/docker/context/code-server/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/code-server/.keep
+# Keep the .gitkeep, ignore code-server-*.tar.gz and install.sh
+# (they're regenerated by prepare-apt-archives.sh)
+aio-sandbox-code-browser-mini/docker/context/code-server/install.sh
+aio-sandbox-code-browser-mini/docker/context/code-server/code-server-*.tar.gz
+
+aio-sandbox-code-browser-mini/docker/context/bin/*
+!aio-sandbox-code-browser-mini/docker/context/bin/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/bin/.keep
+
+aio-sandbox-code-browser-mini/docker/context/dist/
+!aio-sandbox-code-browser-mini/docker/context/dist/.gitkeep
+!aio-sandbox-code-browser-mini/docker/context/dist/.keep
+
+# ----------------------------------------------------------------------------
+# docker / podman artifacts
+# ----------------------------------------------------------------------------
+# Per-image working files (these are produced by docker buildx inside the
+# buildkit sandbox; they should not be checked in by accident).
+*Dockerfile*.bak
+*.dockerfile.bak
+.DS_Store
+
+# ----------------------------------------------------------------------------
+# Generated files (created by prepare scripts — should not be checked in)
+# ----------------------------------------------------------------------------
+# prepare-*.sh may create .prepare-logs/ next to themselves; ignore those.
+.prepare-logs/
+prepare-*.log
+
+# ----------------------------------------------------------------------------
+# WHITELIST (what IS in git)
+# ----------------------------------------------------------------------------
+# We DO want these to be tracked:
+#   - aio-sandbox/Dockerfile.final
+#   - aio-sandbox/README.md
+#   - aio-sandbox/.dockerignore
+#   - aio-sandbox/guard/** (Python source — small)
+#   - aio-sandbox/docker/requirements/**
+#   - aio-sandbox/docker/supervisord/*.conf (Guard confs)
+#   - aio-sandbox/docker/context/prepare-*.sh (download scripts)
+#   - aio-sandbox/docker/context/rootfs/** (orchestration layer)
+#   - aio-sandbox/docker/context/aio/      (aio source — small)
+#   - aio-sandbox/docker/context/static-assets/ (assets source)
+#   - aio-sandbox/docker/context/browser-sdk/ (Python source)
+#   - aio-sandbox/docker/context/python-server/ (Python source)
+#   - aio-sandbox/docker/context/repl-servers/ (JS source)
+#   - aio-sandbox/docker/context/guard/ (legacy copy of guard/, ignored)
+#
+# These together are < 10 MB. The remaining ~3 GB of pre-downloaded assets
+# are produced by the prepare-*.sh scripts.
+# ----------------------------------------------------------------------------
