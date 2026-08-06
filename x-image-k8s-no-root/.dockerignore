@@ -23,3 +23,6 @@ README.md
 # OS 临时
 .DS_Store
 Thumbs.db
+build
+
+.guard-payload
