@@ -14,18 +14,22 @@
 #     aio/                *.tgz   (aio-sandbox-cli's dev deps)
 #     static-assets/      *.tgz   (static-assets build deps)
 #     bun/                *.tgz   (bun tarball)
+#     repl/               *.tgz   (repl-servers/nodejs deps, Dockerfile §7b)
+#     global/             *.tgz   (Dockerfile §15 global npm packages:
+#                                   claude-code, pm2, mcp2rest, ...)
 #
-# Each Dockerfile COPY has a path it expects — see Dockerfile.offline.
+# Each Dockerfile COPY has a path it expects — see Dockerfile.final.
 
 set -euo pipefail
 
 # Where the .tgz files land inside the build context.
 ROOT="$(cd "$(dirname "$0")" && pwd)/npm-tgz"
-mkdir -p "$ROOT"/{aio,static-assets,bun}
+mkdir -p "$ROOT"/{aio,static-assets,bun,repl,global}
 # `.keep` files ensure the dirs exist if no tgz landed there, so the
 # Dockerfile's `COPY context/npm-tgz/<bundle>/ /tmp/npm-tgz/` line
 # never fails with "source path doesn't exist".
-touch "$ROOT/aio/.keep" "$ROOT/static-assets/.keep" "$ROOT/bun/.keep"
+touch "$ROOT/aio/.keep" "$ROOT/static-assets/.keep" "$ROOT/bun/.keep" \
+      "$ROOT/repl/.keep" "$ROOT/global/.keep"
 
 # On Windows / Git-bash, MSYS's path translation can prevent bash from
 # finding `node.exe` even when its dir is on PATH (because the path
@@ -195,6 +199,41 @@ if ! ls "$ROOT/bun"/*.tgz >/dev/null 2>&1; then
         echo "WARN: failed to fetch bun@${BUN_VERSION}; build will try network"
     fi
 fi
+
+# === repl-servers/nodejs bundle (Dockerfile §7b) ===
+pack_into "$(cd "$(dirname "$0")" && pwd)/repl-servers/nodejs" "$ROOT/repl"
+
+# === global npm packages bundle (Dockerfile §15) ===
+# claude-code, pm2, mcp2rest, chrome-devtools-mcp, ... are `npm install -g`
+# in the image. Synthesize a package.json + full lockfile, then pack every
+# resolved dep so the image's
+#   `npm install -g --prefer-offline /tmp/npm-tgz/global/*.tgz`
+# never touches the registry. Keep versions in sync with Dockerfile.final §15.
+GLOBAL_SRC="$WORK/global-src"
+mkdir -p "$GLOBAL_SRC"
+cat > "$GLOBAL_SRC/package.json" <<'GLOBAL_EOF'
+{
+  "name": "aio-sandbox-global-pkgs",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.0.0",
+    "mcp2rest": "*",
+    "@anthropic-ai/claude-code": "2.1.63",
+    "@anthropic-ai/claude-agent-sdk": "0.2.63",
+    "@musistudio/claude-code-router": "*",
+    "pm2": "7.0.3",
+    "@agent-infra/mcp-server-browser": "1.2.29",
+    "chrome-devtools-mcp": "0.21.0",
+    "playwright": "1.56.0"
+  }
+}
+GLOBAL_EOF
+echo "=== resolving global npm lockfile ==="
+(cd "$GLOBAL_SRC" && npm install --package-lock-only --registry "$NPM_REGISTRY" --no-audit --no-fund 2>&1 | tail -3) \
+    || echo "WARN: global lockfile resolution failed; image will fall back to network"
+pack_into "$GLOBAL_SRC" "$ROOT/global"
 
 echo "=== Summary ==="
 for d in "$ROOT"/*/; do

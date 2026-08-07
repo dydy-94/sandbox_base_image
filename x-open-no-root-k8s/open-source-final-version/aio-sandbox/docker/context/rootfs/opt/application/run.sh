@@ -128,6 +128,19 @@ timing_checkpoint "entrypoint_start"
 # ----------------------
 # Convert DISABLE_* to supervisord autostart format
 # ----------------------
+# Default DISABLE_* env vars to "true" (disabled) so dashboards and nginx
+# locations can be safely envsubst'd even if the operator didn't set them.
+# If you want a feature on, set DISABLE_<feature>=false explicitly.
+export DISABLE_JUPYTER="${DISABLE_JUPYTER:-true}"
+export DISABLE_CODE_SERVER="${DISABLE_CODE_SERVER:-true}"
+# VNC + chrome are core sandbox features: enabled by default.
+# DISABLE_BROWSER_UI only controls the /browser-ui panel in the dashboard —
+# the chrome process itself (CDP 9222) stays up either way.
+export DISABLE_BROWSER="${DISABLE_BROWSER:-false}"
+export DISABLE_MCP_BROWSER="${DISABLE_MCP_BROWSER:-true}"
+export DISABLE_VNC="${DISABLE_VNC:-false}"
+export DISABLE_OPENCODE="${DISABLE_OPENCODE:-true}"
+export DISABLE_BROWSER_UI="${DISABLE_BROWSER_UI:-true}"
 export AUTOSTART_JUPYTER=$([ "$DISABLE_JUPYTER" != "true" ] && echo "true" || echo "false")
 export AUTOSTART_CODE_SERVER=$([ "$DISABLE_CODE_SERVER" != "true" ] && echo "true" || echo "false")
 export AUTOSTART_BROWSER=$([ "$DISABLE_BROWSER" != "true" ] && echo "true" || echo "false")
@@ -248,11 +261,19 @@ fi
 export WORKSPACE="${WORKSPACE:-/home/$USER}"
 export BROWSER_DOWNLOAD_DIR_EFFECTIVE="${BROWSER_DOWNLOAD_DIR:-${WORKSPACE}/Downloads}"
 
-# Add user to sudoers with NOPASSWD (only if we have permission)
+# Configure sudo for the sandbox user WITHOUT passwordless root:
+#   - x gets a login password (default 'x123456', override with X_USER_PASSWORD)
+#   - sudoers grants `x ALL=(ALL) ALL` → sudo works but ALWAYS asks for the password
+# No NOPASSWD entry: code running as x (browser pages, pasted commands) can no
+# longer escalate to root silently. sudo still logs every use via /var/log/auth.log.
+export X_USER_PASSWORD="${X_USER_PASSWORD:-X@2026@2026}"
 if [ -w /etc/sudoers.d ]; then
   mkdir -p /etc/sudoers.d
-  echo "$USER ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/$USER
+  echo "$USER ALL=(ALL) ALL" > /etc/sudoers.d/$USER
   chmod 440 /etc/sudoers.d/$USER
+  printf '%s:%s\n' "$USER" "$X_USER_PASSWORD" | chpasswd 2>/dev/null \
+    && log "sudo: user '$USER' password set (X_USER_PASSWORD), NOPASSWD disabled" \
+    || log "WARN: chpasswd failed for '$USER'; sudo password auth may not work"
 else
   log "Warning: Cannot modify sudoers (running in restricted environment)"
 fi
@@ -278,6 +299,10 @@ timing_checkpoint "create_user"
 # ----------------------
 log "Setting up X11 permissions..."
 rm -rf /tmp/.X11-unix  # Clean stale sockets on restart
+# Clean stale X lock files: a hard kill (docker restart/k8s kill) leaves
+# /tmp/.X99-lock behind, which makes tigervnc abort with "Server is already
+# active for display 99" and cascades to chrome (no $DISPLAY) + nginx-wait.
+rm -f /tmp/.X99-lock /tmp/.X1-lock /tmp/.X0-lock 2>/dev/null || true
 mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 set +e
@@ -372,7 +397,7 @@ log "Starting parallel setup (user_setup + config)..."
   fi
   [ -n "${OPENCODE_RENDERED}" ] && chmod 644 "${OPENCODE_RENDERED}" || true
 
-  su - $USER -c "AIO_CLI_SKILL_ENABLED=${COPY_SKILLS_TO_USER_HOME} BROWSER_LANG=${BROWSER_LANG:-en-US} BROWSER_DOWNLOAD_DIR_EFFECTIVE='${BROWSER_DOWNLOAD_DIR_EFFECTIVE}' OPENCODE_RENDERED='${OPENCODE_RENDERED}' bash -s" << 'EOF'
+  su - $USER -c "AIO_CLI_SKILL_ENABLED=${COPY_SKILLS_TO_USER_HOME} BROWSER_LANG=${BROWSER_LANG:-en-US} BROWSER_DOWNLOAD_DIR_EFFECTIVE='${BROWSER_DOWNLOAD_DIR_EFFECTIVE}' BROWSER_NO_FIRST_RUN=${BROWSER_NO_FIRST_RUN:-true} OPENCODE_RENDERED='${OPENCODE_RENDERED}' bash -s" << 'EOF'
 mkdir -p /home/$USER/.npm-global/lib/node_modules
 
 # 1. Copy default configurations
@@ -433,6 +458,20 @@ jq --arg dir "${BROWSER_DOWNLOAD_DIR_EFFECTIVE}" \
   '.download.default_directory = $dir | .download.directory_upgrade = true | .savefile.default_directory = $dir' \
   "$HOME/.config/browser/Default/Preferences" > "$HOME/.config/browser/Default/Preferences.tmp" \
   && mv "$HOME/.config/browser/Default/Preferences.tmp" "$HOME/.config/browser/Default/Preferences"
+
+# Mark the profile as already-initialized so Chrome skips the first-run wizard
+# and the sign-in prompt. Mirrors BROWSER_NO_FIRST_RUN (default true) which adds
+# the matching command-line flags.
+if [ "${BROWSER_NO_FIRST_RUN:-true}" != "false" ]; then
+  jq '
+    .browser.first_run_beacon = true |
+    .profile.gaia_info = {} |
+    .profile.exit_type = "Normal" |
+    .signin.allowed = false |
+    .sync_promo.show_on_first_run_allowed = false
+  ' "$HOME/.config/browser/Default/Preferences" > "$HOME/.config/browser/Default/Preferences.tmp" \
+    && mv "$HOME/.config/browser/Default/Preferences.tmp" "$HOME/.config/browser/Default/Preferences"
+fi
 
 # opencode config (rendered by root before su, merge with user's existing config)
 if [ -n "${OPENCODE_RENDERED}" ] && [ -f "${OPENCODE_RENDERED}" ]; then
@@ -543,15 +582,12 @@ DOHEOF
   envsubst '${BROWSER_REMOTE_DEBUGGING_PORT} ${NGINX_PROXY_CONNECT_TIMEOUT} ${NGINX_SESSION_IDLE_TIMEOUT}' <"/opt/gem/nginx.legacy.conf" >"/opt/gem/nginx/legacy.conf"
   envsubst '${WEBSOCKET_PROXY_PORT}' <"/opt/gem/nginx.vnc.conf" >"/opt/gem/nginx/vnc.conf"
 
-  [ -f "/opt/gem/nginx/nginx.python_srv.conf" ] && \
-    envsubst '${SANDBOX_SRV_PORT} ${NGINX_PROXY_CONNECT_TIMEOUT} ${NGINX_API_IDLE_TIMEOUT} ${NGINX_SESSION_IDLE_TIMEOUT}' <"/opt/gem/nginx/nginx.python_srv.conf" >"/opt/gem/nginx/python_srv.conf" && rm -f "/opt/gem/nginx/nginx.python_srv.conf"
+  # (removed) nginx.python_srv.conf + nginx.gembrowser_compat.conf —
+  # both proxied to python-server :9988 which no longer runs.
 
   if [ -f "/opt/gem/nginx/nginx.opencode.conf" ]; then
     envsubst '${OPENCODE_PORT}' <"/opt/gem/nginx/nginx.opencode.conf" >"/opt/gem/nginx/opencode.conf" && rm -f "/opt/gem/nginx/nginx.opencode.conf"
   fi
-
-  [ -f "/opt/gem/nginx/nginx.gembrowser_compat.conf" ] && \
-    envsubst '${SANDBOX_SRV_PORT} ${NGINX_PROXY_CONNECT_TIMEOUT} ${NGINX_SESSION_IDLE_TIMEOUT}' <"/opt/gem/nginx/nginx.gembrowser_compat.conf" >"/opt/gem/nginx/gembrowser_compat.conf" && rm -f "/opt/gem/nginx/nginx.gembrowser_compat.conf"
 
   if [ -f "/opt/gem/nginx/nginx.mcp_hub.conf" ]; then
     envsubst '${SANDBOX_SRV_PORT}' <"/opt/gem/nginx/nginx.mcp_hub.conf" >"/opt/gem/nginx/mcp_hub.conf" && rm -f "/opt/gem/nginx/nginx.mcp_hub.conf"
@@ -586,8 +622,37 @@ fi
   # code-server removed (v11-no-code build)
   # [ -f "/opt/gem/nginx/nginx.code_server.conf" ] && \
   #   envsubst '${CODE_SERVER_PORT}' <"/opt/gem/nginx/nginx.code_server.conf" >"/opt/gem/nginx/code_server.conf" && rm -f "/opt/gem/nginx/nginx.code_server.conf"
-  [ -f "/opt/gem/nginx/nginx.ui_browser.conf" ] && \
+# /browser-ui dashboard panel is controlled independently from the chrome
+# process: DISABLE_BROWSER_UI=true (default) removes the nginx location so
+# the dashboard never shows the BrowserUI panel, even though chrome/CDP 9222
+# stays up for VNC + agent use.
+if [ "${DISABLE_BROWSER_UI:-true}" != "true" ] && [ -f "/opt/gem/nginx/nginx.ui_browser.conf" ]; then
     envsubst '${BROWSER_REMOTE_DEBUGGING_PORT} ${NGINX_PROXY_CONNECT_TIMEOUT} ${NGINX_SESSION_IDLE_TIMEOUT}' <"/opt/gem/nginx/nginx.ui_browser.conf" >"/opt/gem/nginx/ui_browser.conf" && rm -f "/opt/gem/nginx/nginx.ui_browser.conf"
+elif [ "${DISABLE_BROWSER_UI:-true}" = "true" ]; then
+    rm -f "/opt/gem/nginx/ui_browser.conf" "/opt/gem/nginx/nginx.ui_browser.conf" 2>/dev/null || true
+    log "DISABLE_BROWSER_UI=true — nginx /browser-ui location removed (chrome still runs)"
+fi
+
+# Terminal UI: dashboard panel is hidden (index.html enabled:false); remove the
+# /terminal nginx location too so the endpoint cannot be reached directly via
+# :8080. Set DISABLE_TERMINAL_UI=false to re-enable the /terminal page.
+if [ "${DISABLE_TERMINAL_UI:-true}" != "true" ] && [ -f "/opt/gem/nginx/nginx.ui_terminal.conf" ]; then
+    mv "/opt/gem/nginx/nginx.ui_terminal.conf" "/opt/gem/nginx/ui_terminal.conf"
+elif [ "${DISABLE_TERMINAL_UI:-true}" = "true" ]; then
+    rm -f "/opt/gem/nginx/ui_terminal.conf" "/opt/gem/nginx/nginx.ui_terminal.conf" 2>/dev/null || true
+    log "DISABLE_TERMINAL_UI=true — nginx /terminal location removed"
+fi
+
+# opencode is disabled by default: drop its /opencode location, which otherwise
+# 302-redirects straight into /terminal.
+if [ "${DISABLE_OPENCODE:-true}" = "true" ]; then
+    rm -f "/opt/gem/nginx/opencode.conf" 2>/dev/null || true
+fi
+
+# MCP hub disabled by default: drop /mcp + /v1/mcp routes (502 zombies otherwise).
+if [ "${DISABLE_MCP_BROWSER:-true}" = "true" ]; then
+    rm -f "/opt/gem/nginx/mcp_hub.conf" 2>/dev/null || true
+fi
 
   envsubst '${PUBLIC_PORT} ${PUBLIC_LISTEN_IPV4} ${PUBLIC_LISTEN_IPV6}' <"/opt/gem/nginx-server-port-proxy.conf.template" >"/opt/gem/nginx-server-port-proxy.conf"
 
@@ -634,6 +699,13 @@ if [ ! -f "${LOCALES_DIR}/${BROWSER_LANG_RESOLVED}.pak" ]; then
   fi
 fi
 export BROWSER_EXTRA_ARGS="${BROWSER_NO_SANDBOX} --lang=${BROWSER_LANG_RESOLVED} --time-zone-for-testing=${TZ} ${BROWSER_EXTRA_ARGS}"
+# Skip Chrome first-run wizard & sign-in prompt unless BROWSER_NO_FIRST_RUN=false.
+# --no-first-run suppresses the onboarding tabs, --no-default-browser-check skips
+# the default-browser nag, --disable-sync keeps the profile from offering sign-in.
+if [ "${BROWSER_NO_FIRST_RUN:-true}" != "false" ]; then
+  export BROWSER_EXTRA_ARGS="${BROWSER_EXTRA_ARGS} --no-first-run --no-default-browser-check --disable-sync"
+  log "BROWSER_NO_FIRST_RUN: skipping Chrome first-run wizard & sign-in prompt"
+fi
 timing_checkpoint "env_vars_setup"
 
 # ----------------------
@@ -992,10 +1064,18 @@ timing_checkpoint "gost_config"
 # ----------------------
 # Generate Index Page
 # ----------------------
-if [ -f "/opt/aio/index.html.template" ]; then
-  envsubst '${DISABLE_JUPYTER},${DISABLE_CODE_SERVER}' \
-    < /opt/aio/index.html.template > /opt/aio/index.html
-  rm -rf /opt/aio/index.html.template
+# /opt/aio/index.html is a baked-but-incomplete template: the SANDBOX_CONFIG
+# block at the top uses ${DISABLE_JUPYTER} / ${DISABLE_CODE_SERVER} /
+# ${DISABLE_BROWSER} / ${DISABLE_OPENCODE} placeholders that need to be
+# envsubst'd at container startup with the effective runtime values.
+# The "if [ -f ... template ]" branch was originally for a separate file;
+# here we rewrite the baked file in place so /browser-ui /code-server /jupyter
+# toggle correctly based on DISABLE_* env vars. See commit notes for the
+# reason we chose rewrite-in-place over renaming to .template.
+if [ -f "/opt/aio/index.html" ]; then
+  envsubst '${DISABLE_JUPYTER},${DISABLE_CODE_SERVER},${DISABLE_BROWSER},${DISABLE_OPENCODE}' \
+    < /opt/aio/index.html > /opt/aio/index.html.rendered
+  mv /opt/aio/index.html.rendered /opt/aio/index.html
 fi
 timing_checkpoint "index_page"
 
@@ -1062,13 +1142,14 @@ if [ -n "$RUN_HOOK_POST_READY" ]; then
       done
     }
 
-    # Build the readiness targets to wait for (mirrors nginx-wait.sh logic)
+    # Build the readiness targets to wait for.
+    # python-server :9988 (SANDBOX_SRV_PORT) is gone — only wait on
+    # browser CDP :9222 by default.
     _hook_ports=()
     _hook_files=()
     if [ -n "$WAIT_PORTS" ]; then
       IFS=',' read -ra _hook_ports <<< "$WAIT_PORTS"
     else
-      [ -n "$SANDBOX_SRV_PORT" ] && _hook_ports+=("$SANDBOX_SRV_PORT")
       [ -n "$BROWSER_REMOTE_DEBUGGING_PORT" ] && _hook_ports+=("$BROWSER_REMOTE_DEBUGGING_PORT")
     fi
     if [ -n "$WAIT_FILES" ]; then

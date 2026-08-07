@@ -1,4 +1,4 @@
-﻿﻿﻿﻿# =============================================================================
+# =============================================================================
 # AIO Sandbox — final merged Dockerfile (offline + patch consolidated)
 #
 # Origin: open-source aio-sandbox reverse-engineered from
@@ -39,8 +39,6 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG APT_MIRROR=http://mirrors.aliyun.com/ubuntu
 ARG APT_FALLBACK_MIRRORS=http://mirrors.cloud.tencent.com/ubuntu,http://mirrors.ustc.edu.cn/ubuntu,http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 ARG GOPROXY=https://goproxy.cn,direct
-ARG CARGO_HOME=/opt/cargo
-ARG RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup
 
 # ----- Toolchain versions (pinned so pre-staged assets match) -----
 ARG PY313_VERSION=3.13
@@ -51,7 +49,6 @@ ARG FNM_VERSION=1.39.0
 ARG UV_VERSION=0.11.19
 ARG BUN_VERSION=1.3.14
 ARG MCP_SERVER_BROWSER_VERSION=1.2.29
-ARG AGENT_BROWSER_VERSION=0.27.1
 ARG CHROME_DEVTOOLS_MCP_VERSION=1.1.1
 ARG CODE_SERVER_VERSION=4.123.0
 ARG NOVNC_VERSION=1.7.0
@@ -145,7 +142,6 @@ ARG NODE24_VERSION
 ARG FNM_VERSION
 ARG BUN_VERSION
 ARG MCP_SERVER_BROWSER_VERSION
-ARG AGENT_BROWSER_VERSION
 ARG CHROME_DEVTOOLS_MCP_VERSION
 ARG CODE_SERVER_VERSION
 ARG NOVNC_VERSION
@@ -180,7 +176,9 @@ RUN mkdir -p /var/cache/apt/archives && (cp -an /opt/apt-archives/*.deb /var/cac
 
 # Big apt install: PKGS list with retry. libcrypt-dev (a hard dep of
 # build-essential) isn't in the offline cache, so online fallback is mandatory.
-RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== apt-get install attempt $try ==="; if apt-get install -y --no-install-recommends --fix-missing build-essential gcc make cmake ninja-build meson pkg-config gettext gettext-base gawk libffi-dev libcairo2-dev libpango1.0-dev freeglut3-dev python3-dev ca-certificates curl wget git gh jq file unzip zip tree htop lsof psmisc rsync openssh-client sudo software-properties-common gnupg vim nano less net-tools netcat-openbsd iputils-ping telnet nmap tmux tilix lsyncd ripgrep python3 python3-venv python3-dev python3-pip nginx supervisor tigervnc-standalone-server openbox autocutsel x11-utils x11-xserver-utils xauth xclip xdotool xdg-utils gnome-screenshot dbus dbus-x11 fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-qt5 ffmpeg libopenal1 libfreetype6 imagemagick libnss3 libnspr4 libgbm1 libdrm2 libgtk-3-0t64 libasound2t64 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libwayland-client0 libvulkan1 libxext6 libxv1 libgcrypt20 libglib2.0-0t64 libgl1 libcairo2 libpango-1.0-0 fontconfig fonts-dejavu fonts-liberation fonts-noto-core fonts-noto-extra fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-color-emoji xfonts-intl-chinese locales tzdata 2>&1 | tail -8; then ok=1; break; fi; sleep 5; done; [ $ok = 0 ] && echo WARN_apk_install_failed; \
+# python-server removed: dropped cmake/ninja/meson/gettext/gawk/libffi-dev/
+# libcairo2-dev/libpango1.0-dev/freeglut3-dev (only used for python-server wheels).
+RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== apt-get install attempt $try ==="; if apt-get install -y --no-install-recommends --fix-missing build-essential gcc make pkg-config python3-dev ca-certificates curl wget git gh jq file unzip zip tree htop lsof psmisc rsync openssh-client sudo software-properties-common gnupg vim nano less net-tools netcat-openbsd iputils-ping telnet nmap tmux tilix lsyncd ripgrep python3 python3-venv python3-dev python3-pip nginx supervisor tigervnc-standalone-server openbox autocutsel x11-utils x11-xserver-utils xauth xclip xdotool xdg-utils gnome-screenshot im-config dbus dbus-x11 fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-qt5 ffmpeg libopenal1 libfreetype6 imagemagick libnss3 libnspr4 libgbm1 libdrm2 libgtk-3-0t64 libasound2t64 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libwayland-client0 libvulkan1 libxext6 libxv1 libgcrypt20 libglib2.0-0t64 libgl1 libcairo2 libpango-1.0-0 fontconfig fonts-dejavu fonts-liberation fonts-noto-core fonts-noto-extra fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-color-emoji xfonts-intl-chinese locales tzdata 2>&1 | tail -8; then ok=1; break; fi; sleep 5; done; [ $ok = 0 ] && echo WARN_apk_install_failed; \
     command -v python3 >/dev/null 2>&1 && \
     command -v curl    >/dev/null 2>&1 && \
     command -v wget    >/dev/null 2>&1 && \
@@ -192,11 +190,8 @@ RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== apt-get install at
 RUN rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* 2>/dev/null || true; \
     rm -rf /opt/apt-archives 2>/dev/null || true
 
-# ===== 2a. im-config (input method config) =====
-RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== im-config apt-get update attempt $try ==="; if apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/cn-mirror.sources -o Acquire::http::No-Cache=True -o Acquire::Retries=5 -o Acquire::http::Timeout=120 2>&1 | tail -3; then ok=1; break; fi; sleep 4; done; [ $ok = 0 ] && echo WARN_imconfig_update_failed; \
-    set +e; ok2=0; for try in 1 2 3 4 5; do echo "=== im-config install attempt $try ==="; if apt-get install -y --no-install-recommends im-config 2>&1 | tail -3; then ok2=1; break; fi; sleep 5; done; [ $ok2 = 0 ] && echo WARN_imconfig_install_failed; \
-    rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* 2>/dev/null || true; \
-    exit 0'
+# ===== 2a. im-config — now in the main §2 apt list (offline .deb) =====
+# (removed network-only install; im-config_*.deb ships in docker/context/apt-archives)
 
 # Create python -> python3 symlink (ubuntu:26.04 ships only python3).
 RUN if ! command -v python3 >/dev/null 2>&1; then \
@@ -210,17 +205,26 @@ RUN if ! command -v python3 >/dev/null 2>&1; then \
     (ln -sf /usr/bin/pip3 /usr/bin/pip 2>/dev/null || true) && \
     python --version
 
-# ===== 2b. oras (OCI Registry As Storage) =====
-ARG ORAS_VERSION=1.3.1
-RUN set -eux; \
-    curl -fsSL -o /tmp/oras.tar.gz \
-        "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
-    && mkdir -p /tmp/oras-install \
-    && tar -zxf /tmp/oras.tar.gz -C /tmp/oras-install \
-    && mv /tmp/oras-install/oras /usr/local/bin/oras \
-    && chmod +x /usr/local/bin/oras \
-    && rm -rf /tmp/oras.tar.gz /tmp/oras-install \
-    && oras version
+# ===== 2b. oras (OCI Registry As Storage) — pre-staged binary =====
+# docker/context/bin/oras/oras is downloaded on the host by prepare-all.sh
+# (oras_<ver>_linux_amd64.tar.gz). Offline-first; network fallback kept so a
+# context built without running prepare still succeeds.
+COPY docker/context/bin/oras /opt/oras-pre/
+RUN set +e; \
+    if [ -x /opt/oras-pre/oras ]; then \
+        cp /opt/oras-pre/oras /usr/local/bin/oras && chmod +x /usr/local/bin/oras; \
+    else \
+        echo "WARN: pre-staged oras missing; downloading..."; \
+        curl -fsSL -o /tmp/oras.tar.gz \
+            "https://github.com/oras-project/oras/releases/download/v1.3.1/oras_1.3.1_linux_amd64.tar.gz" \
+        && mkdir -p /tmp/oras-install \
+        && tar -zxf /tmp/oras.tar.gz -C /tmp/oras-install \
+        && mv /tmp/oras-install/oras /usr/local/bin/oras \
+        && chmod +x /usr/local/bin/oras \
+        && rm -rf /tmp/oras.tar.gz /tmp/oras-install; \
+    fi; \
+    rm -rf /opt/oras-pre; \
+    oras version || echo "WARN: oras unavailable"
 
 # ===== 2c. fastmcp (pip) — ubuntu 26.04 has PEP 668 managed env =====
 ARG FORCE_FASTMCP_REBUILD=1
@@ -244,6 +248,14 @@ RUN apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/cn-mirror.sou
         echo "WARN: locale-gen not available; container LANG will fall back to POSIX"; \
     fi
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+
+# ===== 3a. timezone (China Standard Time) =====
+# TZ env flows into supervisord → chrome (--time-zone-for-testing=${TZ} in run.sh).
+# tzdata ships in the §2 apt list; ln /etc/localtime for system-wide tools.
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
+    && date +"%Y-%m-%d %H:%M:%S %Z"
 
 # ===== 4. user (x) =====
 ENV USER=x
@@ -290,17 +302,32 @@ RUN mkdir -p /opt/python3.13/bin /opt/python3/bin && \
 # was still in the cache at the time of §7). Keep the apt install best-
 # effort (`|| true`) so a missing package here is non-fatal.
 ENV FNM_DIR=/opt/fnm
+# Offline-first: fnm zip + node tarball are pre-staged on the host in
+# docker/context/fnm-node/ (prepare-fnm-node.sh). Network fallbacks kept
+# so a context built without running prepare still succeeds.
+COPY docker/context/fnm-node/ /tmp/fnm-pre/
 RUN apt-get install -y --no-install-recommends curl unzip ca-certificates ncurses-term 2>/dev/null \
         || echo "WARN: curl/unzip install from offline cache failed; build may fail"; \
-    if [ "${TARGETARCH}" = "arm64" ]; then \
-        FNM_ASSET="fnm-arm64.zip"; \
+    set +e; \
+    if [ -f /tmp/fnm-pre/fnm-linux.zip ]; then \
+        unzip -o /tmp/fnm-pre/fnm-linux.zip -d /opt/fnm && chmod +x /opt/fnm/fnm; \
     else \
-        FNM_ASSET="fnm-linux.zip"; \
-    fi \
-    && curl -sSL -o /tmp/fnm.zip "https://github.com/Schniz/fnm/releases/download/v${FNM_VERSION}/${FNM_ASSET}" \
-    && unzip /tmp/fnm.zip -d /opt/fnm \
-    && chmod +x /opt/fnm/fnm \
-    && /opt/fnm/fnm install 22 --node-dist-mirror https://npmmirror.com/mirrors/node \
+        if [ "${TARGETARCH}" = "arm64" ]; then FNM_ASSET="fnm-arm64.zip"; else FNM_ASSET="fnm-linux.zip"; fi; \
+        curl -sSL -o /tmp/fnm.zip "https://github.com/Schniz/fnm/releases/download/v${FNM_VERSION}/${FNM_ASSET}" \
+        && unzip /tmp/fnm.zip -d /opt/fnm && chmod +x /opt/fnm/fnm; \
+    fi; \
+    if [ -x /opt/fnm/fnm ]; then \
+        if [ -f "/tmp/fnm-pre/node-v${NODE22_VERSION}-linux-${TARGETARCH}.tar.xz" ]; then \
+            echo "offline: extracting node v${NODE22_VERSION} from pre-staged tarball"; \
+            mkdir -p /opt/nodejs/22 \
+            && tar -xJf "/tmp/fnm-pre/node-v${NODE22_VERSION}-linux-${TARGETARCH}.tar.xz" -C /tmp \
+            && cp -rLP /tmp/node-v${NODE22_VERSION}-linux-${TARGETARCH}/. /opt/nodejs/22/; \
+        else \
+            /opt/fnm/fnm install 22 --node-dist-mirror https://npmmirror.com/mirrors/node; \
+            mkdir -p /opt/nodejs/22; \
+            cp -rLP /opt/fnm/node-versions/v22.*/installation/. /opt/nodejs/22/ 2>/dev/null; \
+        fi; \
+    fi; \
     # NOTE: node 24 is currently unused (only node 22 is wired up via /opt/nodejs/22/
     # and the python-server / REPL-server / npm globals stack). Kept commented
     # out so the build does not pull a 50 MB tarball for nothing. Re-enable
@@ -310,9 +337,8 @@ RUN apt-get install -y --no-install-recommends curl unzip ca-certificates ncurse
     #     --archive-name-format=v{version}-{arch}-{libc}-{runtime}.tar.gz || /opt/fnm/fnm install 24 --node-dist-mirror https://cdn.npmmirror.com/binaries/node \
     #     --archive-name-format=v{version}-{arch}-{libc}-{runtime}.tar.gz \
     #     || echo "WARN: node 24 install failed; falling back to v22 alias only" \
-    && rm -rf /tmp/fnm.zip /opt/fnm/.lastupdate \
-    && mkdir -p /opt/nodejs/22 \
-    && cp -rLP /opt/fnm/node-versions/v22.*/installation/. /opt/nodejs/22/ 2>/dev/null \
+    rm -rf /tmp/fnm.zip /tmp/fnm-pre /tmp/node-v${NODE22_VERSION}-linux-${TARGETARCH} /opt/fnm/.lastupdate \
+    && (test -x /opt/nodejs/22/bin/node || { echo "FATAL: node22 missing after install"; exit 1; }) \
     && ln -sf /opt/nodejs/22/bin/node /usr/local/bin/node \
     && ln -sf /opt/nodejs/22/bin/npm  /usr/local/bin/npm \
     && ln -sf /opt/nodejs/22/bin/node /usr/local/bin/node22 \
@@ -321,38 +347,26 @@ RUN apt-get install -y --no-install-recommends curl unzip ca-certificates ncurse
 # ===== 7b. Node.js REPL server (recovered) =====
 ARG NPM_REGISTRY
 COPY docker/context/repl-servers/nodejs /opt/repl-servers/nodejs
+# Offline-first: repl deps pre-staged as tgz by prepare-npm.sh. Fallback to
+# the CN registry only if no tarballs are present or offline install fails.
+COPY docker/context/npm-tgz/repl/ /tmp/npm-tgz/repl/
 RUN cd /opt/repl-servers/nodejs && \
-    /usr/local/bin/node22 /usr/local/bin/npm install --omit=dev --no-fund --no-audit \
-        --registry ${NPM_REGISTRY:-https://registry.npmmirror.com}
-
-# ===== 8. rust toolchain (vendored) =====
-COPY docker/context/rustup-pre/ /opt/rustup-pre/
-COPY docker/context/cargo-vendored/ /opt/cargo-vendored/
-ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
-RUN if [ "${TARGETARCH}" = "arm64" ]; then \
-        RUSTARCH=aarch64; \
+    if ls /tmp/npm-tgz/repl/*.tgz >/dev/null 2>&1; then \
+        /usr/local/bin/node22 /usr/local/bin/npm install --omit=dev --no-fund --no-audit \
+            --prefer-offline /tmp/npm-tgz/repl/*.tgz 2>/dev/null \
+        || /usr/local/bin/node22 /usr/local/bin/npm install --omit=dev --no-fund --no-audit \
+            --registry ${NPM_REGISTRY:-https://registry.npmmirror.com}; \
     else \
-        RUSTARCH=x86_64; \
-    fi \
-    && echo "RUSTARCH=$RUSTARCH" \
-    && rustup --version 2>/dev/null \
-    || ( \
-        ls -la /opt/rustup-pre/ \
-        && cp /opt/rustup-pre/rustup-init-*${RUSTARCH} /tmp/rustup-init \
-        && chmod +x /tmp/rustup-init \
-        && /tmp/rustup-init -y --default-toolchain stable --no-modify-path \
-                            --profile minimal --target ${RUSTARCH}-unknown-linux-gnu \
-        && rm -f /tmp/rustup-init) \
-    || echo "WARN: rustup-init install failed; cargo install will retry online"
+        /usr/local/bin/node22 /usr/local/bin/npm install --omit=dev --no-fund --no-audit \
+            --registry ${NPM_REGISTRY:-https://registry.npmmirror.com}; \
+    fi; \
+    rm -rf /tmp/npm-tgz/repl; \
+    test -x /opt/repl-servers/nodejs/node_modules/.bin/tsx || echo "WARN: repl deps incomplete"
 
-RUN if [ -d /opt/cargo-vendored/agent-browser ]; then \
-        (cd /opt/cargo-vendored/agent-browser \
-            && cargo install --offline --locked --root /usr/local/cargo \
-            || cargo install --offline --root /usr/local/cargo) \
-        || echo "WARN: cargo install offline failed; build-time fallback to network"; \
-    else \
-        echo "WARN: no vendored agent-browser; cargo install will retry online"; \
-    fi
+# ===== 8. (removed) rust toolchain / agent-browser =====
+# agent-browser (cargo install) never actually installed into the image;
+# the vendored sources (cargo-vendored/, rustup-pre/) were dead weight.
+# Both were deleted from docker/context; rust/cargo toolchain no longer needed.
 
 # ===== 9. chrome / playwright / noVNC / websocat (pre-staged) =====
 COPY docker/context/chrome-deb/ /opt/chrome-deb/
@@ -366,105 +380,12 @@ RUN ln -sf vnc.html /opt/novnc/noVNC/index.html 2>/dev/null; echo "noVNC index.h
 
 RUN bash -euc 'if [ -f /opt/websocat/websocat-x86_64-unknown-linux-musl ]; then install -m 0755 /opt/websocat/websocat-x86_64-unknown-linux-musl /usr/local/bin/websocat; else echo "WARN: websocat binary missing"; fi'
 
-# ===== 10. python-server venv (pre-staged wheels) =====
-COPY docker/context/requirements/ /tmp/requirements/
-ARG PIP_INDEX_URL
-ARG UV_INDEX_URL
-COPY docker/context/wheels/ /opt/wheels/
-COPY docker/context/venv-bootstrap/ /opt/venv-bootstrap/
-RUN if [ -f /opt/venv-bootstrap/venv.tar.gz ]; then \
-        mkdir -p /opt/server-venv && tar -xzf /opt/venv-bootstrap/venv.tar.gz -C /opt/server-venv; \
-    else \
-        mkdir -p /opt/server-venv /opt/wheels; \
-        PY_BIN="$(command -v python3 || command -v python || true)"; \
-        if [ -z "$PY_BIN" ]; then \
-            apt-get install -y --no-install-recommends python3 python3-pip python3-venv 2>/dev/null \
-                && PY_BIN="$(command -v python3)"; \
-        fi; \
-        echo "Using PY_BIN=$PY_BIN"; \
-        "$PY_BIN" -m venv /opt/server-venv; \
-        . /opt/server-venv/bin/activate; \
-        pip install --upgrade --quiet pip; \
-        if [ -f /tmp/requirements/server.txt ]; then \
-            sed -i 's|uvicorn\[standard\]>=0\.30\.0,<0\.32\.0|uvicorn[standard]>=0.30.0,<1.0|g' /tmp/requirements/server.txt || true; \
-            sed -i 's|fastapi>=0\.95\.0,<0\.110|fastapi>=0.95.0,<1.0|g' /tmp/requirements/server.txt || true; \
-            sed -i 's|aiosqlite>=0\.20\.0,<0\.21|aiosqlite>=0.20.0,<1.0|g' /tmp/requirements/server.txt || true; \
-        fi; \
-        if ls /opt/wheels/*.whl >/dev/null 2>&1; then \
-            echo "Stage 1: install from offline wheels with network fallback"; \
-            pip install --no-cache-dir --quiet --no-index --find-links /opt/wheels \
-                -r /tmp/requirements/server.txt 2>&1 \
-                | grep -E "ERROR|Exception" \
-                && echo "stage1 had errors → fallback to network" || echo "stage1 OK"; \
-            pip install --no-cache-dir --retries 8 --timeout 120 \
-                --index-url ${PIP_INDEX_URL} \
-                --extra-index-url https://pypi.org/simple \
-                -r /tmp/requirements/server.txt 2>&1 \
-                | tail -10 || true; \
-        else \
-            echo "Stage 1 (no offline wheels): network install with retries"; \
-            bash -c 'set +e; \
-                for try in 1 2 3 4 5; do \
-                    echo "==== pip install attempt $try ===="; \
-                    pip install --no-cache-dir --retries 8 --timeout 120 \
-                        --index-url ${PIP_INDEX_URL} \
-                        --extra-index-url https://pypi.org/simple \
-                        -r /tmp/requirements/server.txt 2>&1 | tail -10 \
-                        && echo "OK on attempt $try" && break; \
-                    sleep 5; \
-                done'; \
-        fi; \
-        if [ -f /tmp/requirements/dev.txt ]; then \
-            pip install --no-cache-dir --quiet --retries 5 --timeout 60 \
-                --index-url ${PIP_INDEX_URL} \
-                -r /tmp/requirements/dev.txt 2>&1 \
-                | grep -E "ERROR|Exception" || true; \
-        fi; \
-    fi; \
-    chmod +x /opt/application/sweep-so.py 2>/dev/null || true; \
-    bash /opt/application/build-fix-so.sh 2>/dev/null || true; \
-    chown -R 1000:1000 /opt/server-venv 2>/dev/null || true
-
-# ===== 11. copy rootfs helpers + force asyncio event loop in cli.py =====
-COPY docker/context/rootfs/opt/application/build-fix-so.sh /opt/application/build-fix-so.sh
-COPY docker/context/rootfs/opt/application/post-inst.sh /opt/application/post-inst.sh
-COPY docker/context/rootfs/opt/application/run.sh /opt/application/run.sh
-COPY docker/context/rootfs/opt/application/sweep-so.py /opt/application/sweep-so.py
-COPY docker/context/rootfs/opt/application/venv-patch.sh /opt/application/venv-patch.sh
-COPY docker/context/rootfs/opt/application/patch-browser-cdp.py /opt/application/patch-browser-cdp.py
+# ===== 10/11/12. python-server removed =====
+# All venv build, rootfs helpers (build-fix-so, venv-patch, patch-browser-cdp,
+# post-inst, supervisord-wirifier, sweep-so), source copy (browser-sdk,
+# python-server) are gone. python-server is no longer required.
 COPY docker/context/opt/application/init-once.sh /opt/application/init-once.sh
-COPY docker/context/opt/application/supervisord-wirifier.py /opt/application/supervisord-wirifier.py
-RUN chmod +x /opt/application/*.sh /opt/application/*.py
-RUN sed -i "s/'loop': 'uvloop'/'loop': 'asyncio'/" \
-        /opt/server-venv/lib/python3/site-packages/app/cli.py 2>/dev/null \
-    || echo "WARN: cli.py not yet present; will be patched after source copy below"
-
-# ===== 12. copy source trees into the venv =====
-COPY docker/context/browser-sdk   /usr/src/browser-sdk
-COPY docker/context/python-server /usr/src/python-server
-RUN mkdir -p /opt/server-venv/lib/python3/site-packages/app \
-           /opt/server-venv/lib/python3/site-packages/browser_sdk \
-    && cp -r /usr/src/browser-sdk/browser_sdk/. \
-           /opt/server-venv/lib/python3/site-packages/browser_sdk/ \
-    && cp -r /usr/src/python-server/app/. \
-           /opt/server-venv/lib/python3/site-packages/app/ \
-    && cp -r /usr/src/python-server/vendors \
-           /opt/server-venv/lib/python3/site-packages/ \
-    && sed -i "s/'loop': 'uvloop'/'loop': 'asyncio'/" \
-           /opt/server-venv/lib/python3/site-packages/app/cli.py \
-    && (chown -R 1000:1000 /opt/server-venv/lib/python3/site-packages/app 2>/dev/null \
-        || echo "WARN: chown 1000:1000 skipped (user may not exist)") \
-    && (chown -R 1000:1000 /opt/server-venv/lib/python3/site-packages/browser_sdk 2>/dev/null \
-        || true) \
-    && (chown -R 1000:1000 /opt/server-venv/lib/python3/site-packages/vendors 2>/dev/null \
-        || true) \
-    && (if [ -d /opt/server-venv/lib/python3/site-packages/app/logging ]; then \
-           mv /opt/server-venv/lib/python3/site-packages/app/logging \
-              /opt/server-venv/lib/python3/site-packages/app/_app_logging; \
-       fi) \
-    && (find /opt/server-venv/lib/python3/site-packages -name '*.py' \
-           -exec grep -lE 'from app\.logging\.|import app\.logging\.' {} + 2>/dev/null \
-           | xargs -r sed -i 's/\bapp\.logging\b/app._app_logging/g')
+RUN chmod +x /opt/application/init-once.sh
 
 # ===== 13. copy aio client + static assets + ve binaries =====
 COPY --from=aio-build      /build/aio/dist/             /opt/aio/
@@ -479,28 +400,13 @@ COPY docker/context/rootfs/usr/local/bin/             /usr/local/bin/
 RUN chmod +x /usr/local/bin/* 2>/dev/null || true; \
     chown -R 1000:1000 /opt/aio /var/www/app/static 2>/dev/null || true
 
-# ===== 14a. patch _rewrite_websocket_urls =====
-RUN chmod +x /opt/application/patch-browser-cdp.py; \
-    /opt/application/patch-browser-cdp.py /opt/server-venv || true
+# ===== 14a. (removed — was patching python-server venv) =====
 
-# ===== 14b. patch venv post-source copy =====
-RUN bash /opt/application/build-fix-so.sh 2>/dev/null || true; \
-    rm -rf /home/x/.config/browser && mkdir -p /home/x/.config/browser; \
+# ===== 14b. browser config dir pre-create =====
+RUN rm -rf /home/x/.config/browser && mkdir -p /home/x/.config/browser; \
     chown -R 1000:1000 /home/x/.config/browser 2>/dev/null || true
 
-# ===== 14c. rename app.logging → app._app_logging (idempotent) =====
-RUN set -eux; \
-    for pyv in python3 python3.14; do \
-        root=/opt/server-venv/lib/${pyv}/site-packages; \
-        if [ -d "$root" ]; then \
-            if [ -d "$root/app/logging" ] && [ ! -d "$root/app/_app_logging" ]; then \
-                mv "$root/app/logging" "$root/app/_app_logging"; \
-            fi; \
-            find "$root" -name '*.py' -type f 2>/dev/null \
-              | xargs grep -lE 'from app\.logging\.|import app\.logging\.' 2>/dev/null \
-              | xargs -r sed -i 's/\bapp\.logging\b/app._app_logging/g' || true; \
-        fi; \
-    done
+# ===== 14c. (removed — was app.logging rename in python-server venv) =====
 RUN bash -c 'set -eux; \
     mkdir -p /etc/profile.d; \
     [ -f /opt/gem/nodejs.sh ] && ln -sf /opt/gem/nodejs.sh /etc/profile.d/nodejs.sh || true; \
@@ -566,7 +472,7 @@ autostart=true
 autorestart=true
 priority=815
 user=%(ENV_USER)s
-stdout_logfile=%(ENV_LOG_DIR)s/dbus-session.log
+stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=1MB
 stdout_logfile_backups=5
 redirect_stderr=true
@@ -582,7 +488,7 @@ autostart=true
 autorestart=true
 priority=820
 user=x
-stdout_logfile=/var/log/gem/fcitx5.log
+stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=5MB
 stdout_logfile_backups=5
 redirect_stderr=true
@@ -613,23 +519,12 @@ RUN set -e; \
     fi; \
     echo "browser.conf priority raised to 920"
 
-# ===== 14i. drop dead-code supervisord confs (no real binary in image) =====
-RUN set -e; \
-    for f in \
-        /opt/gem/supervisord/autocutsel-clipboard.conf \
-        /opt/gem/supervisord/autocutsel-primary.conf \
-        /opt/gem/supervisord/autocutsel.conf \
-        /opt/gem/supervisord/visible-chrome.conf \
-        /opt/gem/supervisord/dbus.conf \
-        /opt/gem/supervisord/agent-browser.conf \
-        /opt/gem/supervisord/supervisord.nodejs_repl_20.conf \
-        /opt/gem/supervisord/supervisord.nodejs_repl_22.conf \
-        /opt/gem/supervisord/supervisord.nodejs_repl_24.conf; do \
-        if [ -f "$f" ]; then rm -f "$f" && echo "removed $f"; else echo "WARN: $f not found"; fi; \
-    done; \
-    rm -f /opt/gem/fcitx5-activate.sh /opt/gem/agent-browser-init.sh \
-          /opt/gem/bin/agent-browser /opt/gem/agent-browser-wrapper.sh 2>/dev/null || true; \
-    echo "dead-code supervisord confs removed"
+# ===== 14i. (removed) dead-code supervisord confs =====
+# These confs (autocutsel*, dbus.conf, agent-browser.conf,
+# supervisord.nodejs_repl_*.conf) and their companion scripts/binaries were
+# deleted from docker/context/rootfs — they never reach the image now, so the
+# previous rm loop was dead weight. visible-chrome.conf is rebuilt below (14j)
+# with autostart=false.
 
 # ===== 14j. visible-chrome.conf neutralization (defensive write) =====
 RUN printf '[program:visible-chrome]\nautostart=false\nautorestart=false\npriority=200\ncommand=/bin/true\nstdout_logfile=/dev/null\nredirect_stderr=true\n' > /opt/gem/supervisord/visible-chrome.conf && \
@@ -658,8 +553,8 @@ RUN printf '#!/bin/sh\n# final-version: let npm exec find PATH-installed chrome-
 # "Failed to create stream fd: No such file or directory" while trying
 # to open the logfile pipe. We pre-create ALL paths referenced anywhere
 # in /opt/gem/supervisord/*.conf (including daytona/, fcitx5, dbus,
-# python-server, browser, mcp-server-browser, openbox, nginx, vnc,
-# websocat, reclaim-plugins, sandbox-pm2-runtime, sandbox-guard, log_tail).
+# browser, mcp-server-browser, openbox, nginx, vnc,
+# websocat, reclaim-plugins, sandbox-pm2-runtime, sandbox-guard).
 RUN mkdir -p \
         /var/log/gem \
         /var/log/gem/daytona \
@@ -674,7 +569,6 @@ RUN mkdir -p \
           /var/log/gem/daytona/daytona.log \
           /var/log/gem/daytona/daytona_err.log \
           /var/log/gem/nginx.log \
-          /var/log/gem/python-server.log \
           /var/log/gem/browser.log \
           /var/log/gem/openbox.log \
           /var/log/gem/tigervnc.log \
@@ -682,7 +576,6 @@ RUN mkdir -p \
           /var/log/gem/mcp-server-browser.log \
           /var/log/gem/sandbox-pm2.log \
           /var/log/gem/sandbox-guard.log \
-          /var/log/gem/reclaim-plugins.log \
           /var/log/gem/log_tail.log \
           /tmp/dbus-session-bus \
           /tmp/daytona-daemon.log /tmp/daytona-entrypoint.log && \
@@ -696,10 +589,11 @@ RUN mkdir -p \
     mkdir -p /home/x/.mcp2rest /home/x/.daemon/state /home/x/.daemon/logs /home/x/.daemon/locks \
               /home/x/.daemon/events /home/x/.daemon/apps /home/x/.daemon/work \
               /home/x/.claude /home/x/.claude-code-router /home/x/.pm2 /home/x/tmp \
-              /home/x/.npm /home/x/.npm/_npx /home/x/.npm/_cacache && \
+              /home/x/.npm /home/x/.npm/_npx /home/x/.npm/_cacache \
+              /home/x/.run && \
     chown -R 1000:1000 /home/x && \
     chmod -R 755 /home/x && \
-    chmod 700 /home/x/.pm2 /home/x/.npm /home/x/.npm/_npx /home/x/.npm/_cacache
+    chmod 700 /home/x/.pm2 /home/x/.npm /home/x/.npm/_npx /home/x/.npm/_cacache /home/x/.run
 
 # ===== 14n. mcp2rest config (no chrome-devtools-mcp@latest) =====
 RUN printf 'servers:\n  chrome-devtools:\n    name: chrome-devtools\n    package: chrome-devtools-mcp\n    transport: stdio\n    args: ["--browser-url=http://127.0.0.1:9222"]\ngateway:\n  port: 28888\n  host: 0.0.0.0\n  timeout: 30000\n  logLevel: info\n' > /home/x/.mcp2rest/config.yaml && \
@@ -718,8 +612,8 @@ RUN mkdir -p /home/x/.local/share/daytona && \
 command=/usr/local/bin/daytona --interval 5
 autostart=true
 autorestart=true
-stdout_logfile=/var/log/gem/daytona/daytona.log
-stderr_logfile=/var/log/gem/daytona/daytona_err.log
+stdout_logfile=/dev/stdout
+stderr_logfile=/dev/stderr
 user=x
 environment=DAYTONA_DAEMON_LOG_FILE_PATH="/tmp/daytona-daemon.log",DAYTONA_ENTRYPOINT_LOG_FILE_PATH="/tmp/daytona-entrypoint.log",DAYTONA_USER_HOME_AS_WORKDIR="true",LOG_LEVEL="info"
 DAYTONA_CONF_EOF
@@ -727,7 +621,10 @@ DAYTONA_CONF_EOF
 # ===== 14p. inject supervisord.conf environment line =====
 # Top-level [supervisord] environment=DISPLAY=":99" guarantees chrome sees
 # DISPLAY=:99 even when an entrypoint strips the env.
-RUN sed -i '/^\[supervisord\]$/a environment=DISPLAY=":99"\nenvironment=DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/dbus-session-bus"\nenvironment=BROWSER_EXTRA_ARGS=" --no-sandbox --lang=en-US --time-zone-for-testing= --disable-setuid-sandbox --no-zygote --window-position=0,0 --window-size=1280,1024"' /opt/gem/supervisord.conf && \
+# NOTE: BROWSER_EXTRA_ARGS is intentionally NOT pinned here — run.sh composes
+# it at runtime (--lang=${BROWSER_LANG_RESOLVED}, --time-zone-for-testing=${TZ},
+# proxy args, BROWSER_NO_FIRST_RUN). Pinning it here would override those.
+RUN sed -i '/^\[supervisord\]$/a environment=DISPLAY=":99"\nenvironment=DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/dbus-session-bus"' /opt/gem/supervisord.conf && \
     grep -A4 '^\[supervisord\]$' /opt/gem/supervisord.conf
 
 # ===== 14q. sandbox_guard (no-root Guard program bake) =====
@@ -742,7 +639,6 @@ COPY guard/ /home/x/.daemon/
 COPY docker/supervisord/sandbox-pm2-runtime.conf /opt/gem/supervisord/sandbox-pm2-runtime.conf
 COPY docker/supervisord/sandbox-guard-launcher.conf /opt/gem/supervisord/sandbox-guard-launcher.conf
 COPY docker/supervisord/sandbox-daemon.conf /opt/gem/supervisord/sandbox-daemon.conf
-COPY docker/supervisord/reclaim-plugins.conf /opt/gem/supervisord/reclaim-plugins.conf
 
 RUN set -e; \
     rm -f /home/x/.daemon/config.json; \
@@ -780,28 +676,34 @@ RUN NPX_BIN=$(find / -path "*node_modules/npm/bin/npx-cli.js" 2>/dev/null | head
     chmod 755 /usr/local/bin/npx-shim && \
     echo "v13-fix9.11 npx restored: npx -> $NPX_BIN, npx-shim installed"
 
-# ===== 14r3. mcp2rest supervisord conf (autostart, after chrome) =====
+# ===== 14r3. mcp2rest config (NOT auto-started, deploy script will spawn) =====
 # mcp2rest is the MCP-to-REST gateway that exposes browser/chrome-devtools
-# tools over HTTP on :28888. python-server proxies /mcp/* to it. The conf
-# boots mcp2rest with the pre-baked /home/x/.mcp2rest/config.yaml which
-# declares the chrome-devtools MCP server.
-RUN cat > /opt/gem/supervisord/mcp2rest.conf <<'MCP2REST_EOF'
-[program:mcp2rest]
-command=/usr/local/bin/npx --prefix /home/x/.npm-global --prefix /home/x/.npm-global mcp2rest start -c /home/x/.mcp2rest/config.yaml
-directory=/home/x
-autostart=true
-autorestart=true
-startsecs=3
-startretries=3
-priority=905
-user=x
-environment=HOME="/home/x",USER="x",PATH="/home/x/.npm-global/bin:/opt/nodejs/22/bin:/usr/local/bin:/usr/bin:/bin",NPM_CONFIG_PREFIX="/home/x/.npm-global",NODE_PATH="/opt/nodejs/22/lib/node_modules"
-stdout_logfile=AUTO
-stdout_logfile_maxbytes=10MB
-stdout_logfile_backups=3
-redirect_stderr=true
-MCP2REST_EOF
-RUN chown 1000:1000 /opt/gem/supervisord/mcp2rest.conf
+# tools over HTTP on :28888. The supervisord auto-start was REMOVED in
+# v13-fix9.11 because:
+#   1. mcp2rest startup pulls `chrome-devtools-mcp@1.6.0` via npm exec
+#      (extra 30-60s on a slow link) and can race with browser CDP.
+#   2. The deployment hook `sandbox_guard/.../create_policy_mcp2rest_port_ssl.py`
+#      spawns mcp2rest on demand and writes the ready event to
+#      /home/x/.daemon/events/. Bringing it up twice (supervisord + hook)
+#      causes bind:28888 conflicts.
+# We still bake the config + directories so the hook can launch it with
+# a one-liner. /home/x/.mcp2rest/config.yaml is rendered from run.sh
+# below; the directories here just create the empty layout for the hook.
+# (Section 14n already created /home/x/.mcp2rest/ + config.yaml.)
+RUN echo "v13-fix9.11: mcp2rest NOT auto-started via supervisord; deploy hook spawns it" && \
+    rm -f /opt/gem/supervisord/mcp2rest.conf
+
+# ===== 14r4. /opt/novnc/app/ overlay directory (for deploy-time ui.js swap) =====
+# The closed-source / deploy-time hook may scp a patched /opt/novnc/app/ui.js
+# to this path to replace the noVNC-shipped one. The nginx vnc.conf has a
+# `^~ /vnc/app/` location that prefers /opt/novnc/app/ over the baked
+# /opt/novnc/noVNC/app/ tree, so a custom ui.js here wins without rebuilding
+# the image. Without this directory, scp fails with ENOENT under no-root.
+RUN mkdir -p /opt/novnc/app && \
+    chown 1000:1000 /opt/novnc/app && \
+    chmod 755 /opt/novnc/app && \
+    test -f /opt/novnc/app/.gitkeep || touch /opt/novnc/app/.gitkeep && \
+    echo "v13-fix9.11: /opt/novnc/app/ overlay dir created (chown x:x 755)"
 
 # ===== 14s. PYTHONHTTPSVERIFY off for vendored wheels fetch =====
 ENV PYTHONHTTPSVERIFY=0 \
@@ -811,18 +713,39 @@ ENV PYTHONHTTPSVERIFY=0 \
 # ===== 15. global npm packages (claude-code, mcp2rest, pm2, chrome-devtools-mcp) =====
 ARG NPM_REGISTRY
 ARG MCP_SERVER_BROWSER_VERSION
+# Offline-first: every resolved dep (incl. transitive) is pre-staged as tgz
+# by prepare-npm.sh into npm-tgz/global/. `npm install -g *.tgz` installs all
+# of them in one tree so satisfied deps never touch the registry; fallback to
+# the CN registry only when no tarballs exist or the offline install fails.
+COPY docker/context/npm-tgz/global/ /tmp/npm-tgz/global/
 RUN export PATH="/usr/local/bin:$PATH" \
-    && npm install -g --registry ${NPM_REGISTRY} \
-       tsx@^4.19.2 \
-       typescript@^5.0.0 \
-       mcp2rest \
-       @anthropic-ai/claude-code@2.1.63 \
-       @anthropic-ai/claude-agent-sdk@0.2.63 \
-       @musistudio/claude-code-router \
-       pm2@7.0.3 \
-       @agent-infra/mcp-server-browser@${MCP_SERVER_BROWSER_VERSION} \
-       chrome-devtools-mcp@0.21.0 \
-       playwright@1.56.0 \
+    && if ls /tmp/npm-tgz/global/*.tgz >/dev/null 2>&1; then \
+         npm install -g --no-fund --no-audit --prefer-offline /tmp/npm-tgz/global/*.tgz 2>/dev/null \
+         || npm install -g --no-fund --no-audit --registry ${NPM_REGISTRY} \
+            tsx@^4.19.2 \
+            typescript@^5.0.0 \
+            mcp2rest \
+            @anthropic-ai/claude-code@2.1.63 \
+            @anthropic-ai/claude-agent-sdk@0.2.63 \
+            @musistudio/claude-code-router \
+            pm2@7.0.3 \
+            @agent-infra/mcp-server-browser@${MCP_SERVER_BROWSER_VERSION} \
+            chrome-devtools-mcp@0.21.0 \
+            playwright@1.56.0; \
+       else \
+         npm install -g --no-fund --no-audit --registry ${NPM_REGISTRY} \
+            tsx@^4.19.2 \
+            typescript@^5.0.0 \
+            mcp2rest \
+            @anthropic-ai/claude-code@2.1.63 \
+            @anthropic-ai/claude-agent-sdk@0.2.63 \
+            @musistudio/claude-code-router \
+            pm2@7.0.3 \
+            @agent-infra/mcp-server-browser@${MCP_SERVER_BROWSER_VERSION} \
+            chrome-devtools-mcp@0.21.0 \
+            playwright@1.56.0; \
+       fi; \
+    rm -rf /tmp/npm-tgz/global \
     && ln -sf /home/x/.npm-global/bin/mcp-server-browser /usr/local/bin/mcp-server-browser \
     && chown -R 1000:1000 /home/x/.npm-global /home/x/.npm /home/x/.npmrc 2>/dev/null || true \
     && find /home/x/.npm-global/bin -maxdepth 1 -type f -exec chmod +x {} \; 2>/dev/null || true \
@@ -836,14 +759,7 @@ COPY docker/context/dist/libs/computer-use-amd64 /usr/local/lib/daytona-computer
 RUN chmod 755 /usr/local/lib/daytona-computer-use/daytona-computer-use \
     && chown 1000:1000 /usr/local/lib/daytona-computer-use/daytona-computer-use
 
-# ===== 16. python requests on system pip3 (every script can import requests) =====
-ARG REQUESTS_VERSION=2.32.3
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-RUN for i in 1 2 3 4 5; do pip3 install --no-cache-dir --break-system-packages --retries 5 --timeout 60 \
-        --index-url "${PIP_INDEX_URL}" \
-        --extra-index-url https://pypi.org/simple \
-        "requests==${REQUESTS_VERSION}" 2>&1 | tail -10 && break; echo "retry $i..."; sleep 3; done; \
-    python3 -c "import requests; print('requests', requests.__version__, 'installed at', requests.__file__)"
+# ===== 16. (removed — was pip3 install requests for python-server) =====
 
 # ===== 17. apt cache cleanup =====
 RUN rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* \
@@ -852,10 +768,6 @@ RUN rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* \
     rm -rf /tmp/npm-tgz /tmp/requirements /tmp/active.conf 2>/dev/null || true; \
     rm -rf /root/.cargo/registry/cache /root/.cargo/git 2>/dev/null || true; \
     rm -rf /root/.npm /root/.node-gyp 2>/dev/null || true; \
-    find /opt/server-venv -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true; \
-    find /opt/server-venv -name 'RECORD'  -path '*.dist-info/RECORD'  -delete 2>/dev/null || true; \
-    find /opt/server-venv -name 'WHEEL'   -path '*.dist-info/WHEEL'   -delete 2>/dev/null || true; \
-    find /opt/server-venv -name 'direct_url.json' -path '*.dist-info/direct_url.json' -delete 2>/dev/null || true; \
     rm -rf /var/log/apt/* /var/log/dpkg.log /var/log/bootstrap.log 2>/dev/null || true; \
     rm -rf /usr/share/doc/* /usr/share/man/* 2>/dev/null || true; \
     find /usr/lib /lib -name '*.a' -type f -delete 2>/dev/null || true; \
@@ -868,7 +780,6 @@ RUN rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* \
 RUN dpkg --purge --force-all \
         fonts-noto-extra fonts-noto-cjk-extra fonts-urw-base35 \
         snapd chromium-browser \
-        cmake cmake-data \
         nmap nmap-common \
         libflite1 libgs10 libqt5gui5t64 \
         rust-coreutils \
@@ -886,7 +797,7 @@ RUN dpkg --purge --force-all \
     rm -rf /home/x/.npm/_cacache 2>/dev/null || true; \
     apt-get update -qq 2>/dev/null && apt-get install -y --no-install-recommends vim-tiny 2>/dev/null || true; \
     dpkg --purge --force-all vim vim-common vim-runtime 2>/dev/null || true; \
-    rm -rf /tmp/chrome-profile /opt/rustup-pre 2>/dev/null || true; \
+    rm -rf /tmp/chrome-profile 2>/dev/null || true; \
     rm -f /usr/share/fonts/opentype/noto/NotoSerifCJK-ExtraLight.ttc \
           /usr/share/fonts/opentype/noto/NotoSerifCJK-Light.ttc \
           /usr/share/fonts/opentype/noto/NotoSerifCJK-Medium.ttc \
@@ -896,9 +807,8 @@ RUN dpkg --purge --force-all \
           /usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc \
           2>/dev/null || true; \
     rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* 2>/dev/null || true; \
-    find /opt/server-venv -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true; \
     rm -rf /usr/libexec/gcc /usr/include/* /opt/nodejs/22/include \
-           /opt/fnm /opt/cargo-vendored /usr/libexec/glycin-loaders \
+           /opt/fnm /usr/libexec/glycin-loaders \
            /usr/lib/cargo \
            2>/dev/null || true; \
     rm -f /usr/bin/x86_64-linux-gnu-lto-dump-15 \
@@ -917,11 +827,7 @@ RUN dpkg --purge --force-all \
     rm -rf /usr/share/icons/Adwaita /usr/share/icons/AdwaitaLegacy 2>/dev/null || true; \
     echo "deep cleanup done"
 
-# Rebuild .pyc cache so python-server starts fast (~30s → ~3s)
-RUN /opt/server-venv/bin/python -m compileall -q -f \
-        /opt/server-venv/lib/python3/site-packages \
-        /opt/server-venv/lib/python3.14/site-packages \
-        2>/dev/null || true
+# (Removed — was rebuilding .pyc cache for python-server venv)
 
 # =============================================================================
 # Stage 6 — squash: single layer from builder
@@ -929,6 +835,9 @@ RUN /opt/server-venv/bin/python -m compileall -q -f \
 FROM ubuntu:26.04
 COPY --from=builder / /
 ENV DEBIAN_FRONTEND=noninteractive
+# China Standard Time — must be declared here (final stage): the squash
+# stage only COPYs files from builder, ENV metadata does NOT carry over.
+ENV TZ=Asia/Shanghai
 ENV USER=x
 ENV USER_UID=1000
 ENV USER_GID=1000
@@ -946,6 +855,8 @@ ENV DAYTONA_ENTRYPOINT_LOG_FILE_PATH=/tmp/daytona-entrypoint.log
 ENV DAYTONA_USER_HOME_AS_WORKDIR=true
 ENV LOG_LEVEL=info
 ENV BROWSER_EXTRA_ARGS="--disable-setuid-sandbox --no-zygote --window-position=0,0 --window-size=1280,1024"
+# Skip Chrome first-run wizard + sign-in prompt (BROWSER_NO_FIRST_RUN=false to restore)
+ENV BROWSER_NO_FIRST_RUN=true
 ENV DISABLE_JUPYTER=true
 ENV PUBLIC_PORT=8080 \
     VNC_SERVER_PORT=5900 \

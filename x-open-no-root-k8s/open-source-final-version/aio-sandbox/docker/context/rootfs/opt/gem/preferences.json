@@ -8,6 +8,7 @@
   "password_manager_enabled": false,
   "browser": {
     "custom_chrome_frame": false,
+    "first_run_beacon": true,
     "show_home_button": true,
     "window_placement": {
       "maximized": true
@@ -21,8 +22,10 @@
   },
   "profile": {
     "avatar_index": 19,
+    "exit_type": "Normal",
+    "gaia_info": {},
     "default_content_setting_values": {
-      "clipboard": 2,
+      "clipboard": 1,
       "cookies": 4,
       "geolocation": 2,
       "media_stream_camera": 2,

@@ -6,9 +6,9 @@
 #   1. prepare-apt-archives.sh   — fetches 769+ apt .deb files
 #                                   (incl. chrome/noVNC/websocat/code-server)
 #   2. prepare-wheels.sh         — fetches python-server runtime pip wheels
-#   3. prepare-rust.sh           — fetches rustup-init + agent-browser source
-#   4. prepare-npm.sh            — fetches aio/static-assets npm tarballs
-#   5. prepare-daytona.sh        — fetches daytona + computer-use binaries
+#   3. prepare-npm.sh            — fetches aio/static-assets npm tarballs
+#   4. prepare-daytona.sh        — fetches daytona + computer-use binaries
+#   5. prepare-fnm-node.sh       — fetches fnm + node 22 tarball
 #
 # After this script finishes, you can build the image with NO network
 # access (assuming the CN-mirrors stay reachable for the few packages that
@@ -22,7 +22,7 @@
 #   ./prepare-all.sh
 #
 # Override individual sub-scripts by setting SKIP_<NAME>=1:
-#   SKIP_NPM=1 SKIP_RUST=1 bash prepare-all.sh
+#   SKIP_NPM=1 bash prepare-all.sh
 #
 # All downloads go to CN mirrors (TUNA / aliyun / npmmirror) first, with
 # upstream fallbacks. If you have an internal corporate mirror (e.g.
@@ -49,11 +49,11 @@ step() {
     local skip_var="SKIP_$(echo "$name" | tr 'a-z-' 'A-Z_')"
     if [ "${!skip_var:-0}" = "1" ]; then
         echo
-        echo "===== [$n/5] $name  SKIPPED (${skip_var}=1) ====="
+        echo "===== [$n/6] $name  SKIPPED (${skip_var}=1) ====="
         return 0
     fi
     echo
-    echo "===== [$n/5] $name  ($script) ====="
+    echo "===== [$n/6] $name  ($script) ====="
     local log="$LOG_DIR/${name}.log"
     if bash "$script" 2>&1 | tee "$log"; then
         echo "===== [$n/5] $name  OK ====="
@@ -68,9 +68,9 @@ T0=$(date +%s)
 
 step 1 apt    prepare-apt-archives.sh
 step 2 wheels prepare-wheels.sh
-step 3 rust   prepare-rust.sh
-step 4 npm    prepare-npm.sh
-step 5 daytona prepare-daytona.sh
+step 3 npm    prepare-npm.sh
+step 4 daytona prepare-daytona.sh
+step 5 fnm-node prepare-fnm-node.sh
 
 T1=$(date +%s)
 ELAPSED=$((T1 - T0))
@@ -80,7 +80,7 @@ echo "All offline assets prepared in ${ELAPSED}s."
 echo "Logs:  $LOG_DIR/"
 echo
 echo "Asset summary:"
-for d in apt-archives wheels rustup-pre cargo-vendored npm-tgz bin dist; do
+for d in apt-archives wheels npm-tgz bin dist; do
     if [ -d "$SCRIPT_DIR/$d" ]; then
         n=$(find "$SCRIPT_DIR/$d" -maxdepth 2 -type f | wc -l)
         s=$(du -sh "$SCRIPT_DIR/$d" 2>/dev/null | awk '{print $1}')

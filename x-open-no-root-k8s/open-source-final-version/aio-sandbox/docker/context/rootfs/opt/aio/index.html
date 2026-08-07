@@ -466,11 +466,15 @@
 
     <script>
         // Injected configuration from environment variables
+        // Defaults are 'true' (disabled); run.sh envsubst overrides these
+        // from DISABLE_JUPYTER / DISABLE_CODE_SERVER / DISABLE_BROWSER /
+        // DISABLE_OPENCODE. If a variable is left unset the corresponding
+        // panel is hidden in the dashboard.
         window.SANDBOX_CONFIG = {
-            disable_jupyter: 'true',
-            disable_code_server: 'true',
-            disable_browser: 'true',
-            disable_opencode: 'true'
+            disable_jupyter: '${DISABLE_JUPYTER}',
+            disable_code_server: '${DISABLE_CODE_SERVER}',
+            disable_browser: '${DISABLE_BROWSER}',
+            disable_opencode: '${DISABLE_OPENCODE}'
         };
 
         class WorkspaceManager {
@@ -510,7 +514,7 @@
                         title: 'Terminal',
                         baseUrl: '/terminal',
                         active: false,
-                        enabled: true,  // Terminal always enabled
+                        enabled: false,  // Terminal panel hidden from dashboard
                         element: null
                     },
                     opencode: {
@@ -1178,9 +1182,9 @@
                     try {
                         const state = JSON.parse(saved);
 
-                        // Restore panel states
+                        // Restore panel states (skip panels hidden via enabled:false)
                         Object.entries(state.panels || {}).forEach(([id, panelState]) => {
-                            if (this.panels[id]) {
+                            if (this.panels[id] && this.panels[id].enabled !== false) {
                                 this.panels[id].active = panelState.active;
                                 const toggle = document.querySelector(`.panel-toggle[data-panel="${id}"]`);
                                 if (toggle) {

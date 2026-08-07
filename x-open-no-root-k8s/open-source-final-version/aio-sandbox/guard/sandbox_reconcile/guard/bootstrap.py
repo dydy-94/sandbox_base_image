@@ -52,12 +52,9 @@ def _start_daemon(cfg: dict[str, Any]) -> None:
     )
 
     daemon_cmd = f"{shlex_quote(sys.executable)} -u {shlex_quote(str(root_dir / 'sandbox_guard.py'))} daemon --config {shlex_quote(str(config_path))}"
-    # NOTE: original code wrote "stdout_logfile=/proc/1/fd/1". That path is
-    # owned by root (PID 1 is supervisord), so user=x children (rootless
-    # profile) can't write to it and supervisord logs
-    # "/proc/1/fd/1: Permission denied" on every startup. Use AUTO so
-    # supervisord picks a unique fd in its own log dir; nested logs are
-    # still visible via `supervisorctl tail -f`.
+    # A1 logging: send program output to the container stdout/stderr so
+    # `docker logs` sees it. /dev/stdout resolves to supervisord's own fd 1
+    # (safe for rootless; /proc/1/fd/1 hit permission-denied instead).
     daemon_conf = (
         f"[program:{program}]\n"
         f"command={daemon_cmd}\n"
@@ -70,9 +67,9 @@ def _start_daemon(cfg: dict[str, Any]) -> None:
         "stopasgroup=true\n"
         "killasgroup=true\n"
         f"environment={env_line}\n"
-        "stdout_logfile=AUTO\n"
+        "stdout_logfile=/dev/stdout\n"
         "stdout_logfile_maxbytes=0\n"
-        "stderr_logfile=AUTO\n"
+        "stderr_logfile=/dev/stderr\n"
         "stderr_logfile_maxbytes=0\n"
     )
     launcher_cmd = (
@@ -87,9 +84,9 @@ def _start_daemon(cfg: dict[str, Any]) -> None:
         "autorestart=false\n"
         "startsecs=0\n"
         "startretries=1\n"
-        "stdout_logfile=AUTO\n"
+        "stdout_logfile=/dev/stdout\n"
         "stdout_logfile_maxbytes=0\n"
-        "stderr_logfile=AUTO\n"
+        "stderr_logfile=/dev/stderr\n"
         "stderr_logfile_maxbytes=0\n"
     )
     base = f"{ctl_bin} -c {shlex_quote(str(ctl_conf))}" if ctl_conf else ctl_bin
