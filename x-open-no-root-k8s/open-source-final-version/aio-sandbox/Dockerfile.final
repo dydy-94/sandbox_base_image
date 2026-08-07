@@ -522,14 +522,13 @@ RUN set -e; \
 # ===== 14i. (removed) dead-code supervisord confs =====
 # These confs (autocutsel*, dbus.conf, agent-browser.conf,
 # supervisord.nodejs_repl_*.conf) and their companion scripts/binaries were
-# deleted from docker/context/rootfs — they never reach the image now, so the
-# previous rm loop was dead weight. visible-chrome.conf is rebuilt below (14j)
-# with autostart=false.
+# deleted from docker/context/rootfs — they never reach the image now. The
+# obsolete visible-chrome.conf is removed outright in 14j below: browser.conf
+# is the sole chrome program, and a stale conf would show up in
+# `supervisorctl status` (and could be mis-started by older launch scripts).
 
-# ===== 14j. visible-chrome.conf neutralization (defensive write) =====
-RUN printf '[program:visible-chrome]\nautostart=false\nautorestart=false\npriority=200\ncommand=/bin/true\nstdout_logfile=/dev/null\nredirect_stderr=true\n' > /opt/gem/supervisord/visible-chrome.conf && \
-    printf '#!/bin/sh\nexit 0\n' > /opt/gem/start-visible-chrome.sh && \
-    chmod +x /opt/gem/start-visible-chrome.sh
+# ===== 14j. remove visible-chrome.conf + companion script =====
+RUN rm -f /opt/gem/supervisord/visible-chrome.conf /opt/gem/start-visible-chrome.sh
 
 # ===== 14k. /etc/environment — propagate ENV_* into every supervisord child =====
 RUN { \
@@ -670,7 +669,7 @@ COPY guard/ /home/x/.daemon/
 # Add 3 no-root Guard confs (sandbox-pm2-runtime, sandbox-guard-launcher, sandbox-daemon)
 # Note: do NOT COPY docker/context/rootfs/opt/gem/supervisord/ wholesale — that would
 # overwrite the patch-time edits above (dbus-session, fcitx5, browser priority,
-# visible-chrome). Instead, additively COPY each Guard conf individually.
+# removed visible-chrome). Instead, additively COPY each Guard conf individually.
 COPY docker/supervisord/sandbox-pm2-runtime.conf /opt/gem/supervisord/sandbox-pm2-runtime.conf
 COPY docker/supervisord/sandbox-guard-launcher.conf /opt/gem/supervisord/sandbox-guard-launcher.conf
 COPY docker/supervisord/sandbox-daemon.conf /opt/gem/supervisord/sandbox-daemon.conf
