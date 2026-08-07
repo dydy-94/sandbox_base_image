@@ -32,8 +32,8 @@ MIRRORS=(
 PKGS=(build-essential gcc make cmake ninja-build meson pkg-config gettext gawk
       libffi-dev libcairo2-dev libpango1.0-dev freeglut3-dev python3-dev
       ca-certificates curl wget git gh jq file unzip zip tree htop lsof psmisc
-      rsync openssh-client sudo software-properties-common gnupg vim nano less
-      net-tools netcat-openbsd iputils-ping telnet nmap tmux tilix lsyncd
+      sudo software-properties-common gnupg vim
+      net-tools netcat-openbsd iputils-ping telnet
       ripgrep
       python3 python3-venv python3-dev python3-pip
       nginx supervisor

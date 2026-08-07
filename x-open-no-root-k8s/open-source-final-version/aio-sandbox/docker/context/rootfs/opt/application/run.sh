@@ -82,10 +82,17 @@ setup_xdg_runtime_dir() {
     log "Using XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
   fi
 
-  mkdir -p /run/user
-  mkdir -p "$XDG_RUNTIME_DIR"
-  chown $USER:$USER "$XDG_RUNTIME_DIR"
-  chmod 700 "$XDG_RUNTIME_DIR"
+  # k8s runAsUser 1000 (non-root): /run/user/1000 is pre-created at build
+  # time (Dockerfile 14m2) since a uid-1000 process cannot mkdir under /run.
+  if [ "$(id -u)" = "0" ]; then
+    mkdir -p /run/user
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chown $USER:$USER "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+  else
+    mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+    log "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR} (pre-created at build time)"
+  fi
 }
 
 setup_dbus_session_socket() {
@@ -329,23 +336,31 @@ mkdir -p "$WORKSPACE" "$BROWSER_DOWNLOAD_DIR_EFFECTIVE"
 chown $USER:$USER "$BROWSER_DOWNLOAD_DIR_EFFECTIVE"
 log "Browser downloads directory: ${BROWSER_DOWNLOAD_DIR_EFFECTIVE}"
 
-log "Setting up Nginx directories..."
-mkdir -p /var/lib/nginx
-chmod 1777 /var/lib/nginx
-chown nobody /var/lib/nginx
+# nginx temp/cache dirs are pre-created at build time (Dockerfile 14m2)
+# with the exact nobody ownership; only root needs to (re)create them here
+# (e.g. docker run as root). uid-1000 launches must skip mkdir/chown under
+# /var/lib to avoid "Permission denied".
+if [ "$(id -u)" = "0" ]; then
+  log "Setting up Nginx directories..."
+  mkdir -p /var/lib/nginx
+  chmod 1777 /var/lib/nginx
+  chown nobody /var/lib/nginx
 
-NGINX_RUNTIME_DIR=/var/lib/aio-sandbox/nginx
-mkdir -p "${NGINX_RUNTIME_DIR}"
-chmod 755 /var/lib/aio-sandbox "${NGINX_RUNTIME_DIR}"
-chown nobody:root "${NGINX_RUNTIME_DIR}"
-for temp_dir in body proxy fastcgi scgi uwsgi; do
-  mkdir -p "${NGINX_RUNTIME_DIR}/${temp_dir}"
-  chown nobody:root "${NGINX_RUNTIME_DIR}/${temp_dir}"
-  chmod 700 "${NGINX_RUNTIME_DIR}/${temp_dir}"
-done
+  NGINX_RUNTIME_DIR=/var/lib/aio-sandbox/nginx
+  mkdir -p "${NGINX_RUNTIME_DIR}"
+  chmod 755 /var/lib/aio-sandbox "${NGINX_RUNTIME_DIR}"
+  chown nobody:root "${NGINX_RUNTIME_DIR}"
+  for temp_dir in body proxy fastcgi scgi uwsgi; do
+    mkdir -p "${NGINX_RUNTIME_DIR}/${temp_dir}"
+    chown nobody:root "${NGINX_RUNTIME_DIR}/${temp_dir}"
+    chmod 700 "${NGINX_RUNTIME_DIR}/${temp_dir}"
+  done
+else
+  log "Nginx directories already pre-created at build time (non-root launch)"
+fi
 
 if [ -d /opt/jupyter ]; then
-    chown -R $USER:$USER /opt/jupyter
+    chown -R $USER:$USER /opt/jupyter 2>/dev/null || true
 fi
 timing_checkpoint "create_directories"
 
@@ -397,7 +412,7 @@ log "Starting parallel setup (user_setup + config)..."
   fi
   [ -n "${OPENCODE_RENDERED}" ] && chmod 644 "${OPENCODE_RENDERED}" || true
 
-  su - $USER -c "AIO_CLI_SKILL_ENABLED=${COPY_SKILLS_TO_USER_HOME} BROWSER_LANG=${BROWSER_LANG:-en-US} BROWSER_DOWNLOAD_DIR_EFFECTIVE='${BROWSER_DOWNLOAD_DIR_EFFECTIVE}' BROWSER_NO_FIRST_RUN=${BROWSER_NO_FIRST_RUN:-true} OPENCODE_RENDERED='${OPENCODE_RENDERED}' bash -s" << 'EOF'
+  USER_SETUP_SCRIPT=$(cat <<'EOF'
 mkdir -p /home/$USER/.npm-global/lib/node_modules
 
 # 1. Copy default configurations
@@ -481,6 +496,17 @@ if [ -n "${OPENCODE_RENDERED}" ] && [ -f "${OPENCODE_RENDERED}" ]; then
 fi
 rm -f "${OPENCODE_RENDERED}" 2>/dev/null || true
 EOF
+)
+  # k8s runAsUser 1000 (non-root): `su -` needs root, so run the same setup
+  # script directly as the current user (we already ARE x). Root launches
+  # keep the original su so env/HOME match a fresh login.
+  USER_SETUP_ENVS="AIO_CLI_SKILL_ENABLED=${COPY_SKILLS_TO_USER_HOME} BROWSER_LANG=${BROWSER_LANG:-en-US} BROWSER_DOWNLOAD_DIR_EFFECTIVE='${BROWSER_DOWNLOAD_DIR_EFFECTIVE}' BROWSER_NO_FIRST_RUN=${BROWSER_NO_FIRST_RUN:-true} OPENCODE_RENDERED='${OPENCODE_RENDERED}'"
+  if [ "$(id -u)" = "0" ]; then
+    su - $USER -c "${USER_SETUP_ENVS} bash -s" <<< "${USER_SETUP_SCRIPT}"
+  else
+    log "non-root launch: running user config setup directly (no su)"
+    HOME="/home/$USER" USER="$USER" eval "${USER_SETUP_ENVS} bash -s" <<< "${USER_SETUP_SCRIPT}"
+  fi
 ) &
 PID_USER_SETUP=$!
 
@@ -489,27 +515,35 @@ PID_USER_SETUP=$!
   # DNS over HTTPS Configuration
   TRIMMED_DOH_TEMPLATES="$(echo -n "$DNS_OVER_HTTPS_TEMPLATES" | xargs)"
   if [ -n "$TRIMMED_DOH_TEMPLATES" ]; then
-    mkdir -p /etc/browser/policies/managed
-    cat >/etc/browser/policies/managed/dns_over_https.json <<DOHEOF
+    if [ -w /etc/browser/policies/managed ] 2>/dev/null || [ "$(id -u)" = "0" ]; then
+      mkdir -p /etc/browser/policies/managed
+      cat >/etc/browser/policies/managed/dns_over_https.json <<DOHEOF
 {
   "DnsOverHttpsMode": "secure",
   "DnsOverHttpsTemplates": "$TRIMMED_DOH_TEMPLATES"
 }
 DOHEOF
+    else
+      log "WARNING: skip DoH policy (no write access to /etc/browser as uid $(id -u))"
+    fi
   fi
 
   # URL Blocklist/Allowlist Policy
   TRIMMED_BLOCKLIST="$(echo -n "${BROWSER_URL_BLOCKLIST:-}" | xargs)"
   TRIMMED_ALLOWLIST="$(echo -n "${BROWSER_URL_ALLOWLIST:-}" | xargs)"
   if [ -n "$TRIMMED_BLOCKLIST" ] || [ -n "$TRIMMED_ALLOWLIST" ]; then
-    URL_POLICY="{}"
-    if [ -n "$TRIMMED_BLOCKLIST" ]; then
-      URL_POLICY=$(echo "$URL_POLICY" | jq --argjson list "$(echo "$TRIMMED_BLOCKLIST" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$";""))')" '.URLBlocklist = $list')
+    if [ -w /etc/browser/policies/managed ] 2>/dev/null || [ "$(id -u)" = "0" ]; then
+      URL_POLICY="{}"
+      if [ -n "$TRIMMED_BLOCKLIST" ]; then
+        URL_POLICY=$(echo "$URL_POLICY" | jq --argjson list "$(echo "$TRIMMED_BLOCKLIST" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$";""))')" '.URLBlocklist = $list')
+      fi
+      if [ -n "$TRIMMED_ALLOWLIST" ]; then
+        URL_POLICY=$(echo "$URL_POLICY" | jq --argjson list "$(echo "$TRIMMED_ALLOWLIST" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$";""))')" '.URLAllowlist = $list')
+      fi
+      echo "$URL_POLICY" > /etc/browser/policies/managed/url_filter.json
+    else
+      log "WARNING: skip URL policy (no write access to /etc/browser as uid $(id -u))"
     fi
-    if [ -n "$TRIMMED_ALLOWLIST" ]; then
-      URL_POLICY=$(echo "$URL_POLICY" | jq --argjson list "$(echo "$TRIMMED_ALLOWLIST" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$";""))')" '.URLAllowlist = $list')
-    fi
-    echo "$URL_POLICY" > /etc/browser/policies/managed/url_filter.json
   fi
 
   # Nginx listen address configuration
@@ -1257,6 +1291,20 @@ if [ -n "${USER:-}" ] && [ "${USER}" != "root" ]; then
   su - ${USER} -c "pm2 ping >/dev/null 2>&1" || true
   # Ensure socket ownership even if daemon was already running as root
   chown ${USER_UID:-1000}:${USER_GID:-1000} /home/${USER}/.pm2/rpc.sock /home/${USER}/.pm2/pub.sock 2>/dev/null || true
+fi
+
+# ----------------------
+# Make container stdout/stderr pipes world-writable for the non-root
+# supervisor process. When launched as root (default `docker run`), docker
+# creates the stdout pipe owned by root (0600). supervisord drops to user=x
+# via `[supervisord] user=x`, then opens /dev/stdout (-> /proc/self/fd/1)
+# for each `[program:...] stdout_logfile=/dev/stdout`; as uid 1000 it gets
+# EACCES because the pipe is root-owned. fchmod 0666 lets uid-1000 open the
+# same pipe. Under k8s runAsUser:1000 the pipe is already owned by 1000, so
+# this block is a no-op (and uid-1000 couldn't fchmod a root pipe anyway).
+# ----------------------
+if [ "$(id -u)" = "0" ]; then
+  python3 -c "import os; os.fchmod(1, 0o666); os.fchmod(2, 0o666)" 2>/dev/null || true
 fi
 
 exec /usr/bin/supervisord -n -c /opt/gem/supervisord.conf
