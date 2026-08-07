@@ -794,12 +794,15 @@ RUN mkdir -p /home/x/node_modules/.bin \
     && chown -R 1000:1000 /home/x/node_modules
 
 # ===== 15a. daytona daemon + computer-use plugin =====
+# daytona execs the plugin binary directly at /usr/local/lib/daytona-computer-use
+# (a single FILE, not a directory) — keep the layout flat or fork/exec fails
+# with EACCES "permission denied". Must be the Linux ELF build, not the
+# Windows PE artifact that some mirror URLs return.
 COPY docker/context/bin/daytona /usr/local/bin/daytona
 RUN chmod +x /usr/local/bin/daytona
-RUN mkdir -p /usr/local/lib/daytona-computer-use
-COPY docker/context/dist/libs/computer-use-amd64 /usr/local/lib/daytona-computer-use/daytona-computer-use
-RUN chmod 755 /usr/local/lib/daytona-computer-use/daytona-computer-use \
-    && chown 1000:1000 /usr/local/lib/daytona-computer-use/daytona-computer-use
+COPY docker/context/dist/libs/computer-use-amd64 /usr/local/lib/daytona-computer-use
+RUN chmod 755 /usr/local/lib/daytona-computer-use \
+    && chown 1000:1000 /usr/local/lib/daytona-computer-use
 
 # ===== 16. (removed — was pip3 install requests for python-server) =====
 
