@@ -782,6 +782,18 @@ RUN export PATH="/usr/local/bin:$PATH" \
     && find /home/x/.npm-global/bin -maxdepth 1 -type f -exec chmod +x {} \; 2>/dev/null || true \
     && chown -R 1000:1000 /home/x
 
+# mcp2rest spawns chrome-devtools-mcp via `npx chrome-devtools-mcp` (hardcoded
+# in mcp2rest 0.6.x StdioClientTransport). npx only resolves cwd's
+# node_modules/.bin before falling back to the registry, so without a local
+# copy it re-downloads chrome-devtools-mcp@latest (1.x) on every start. On the
+# isolated intranet that stalls past the gateway's 30s connect timeout and the
+# client sees `MCP error -32001: request timed out`. Symlink the pinned global
+# install into /home/x/node_modules/.bin so npx resolves it instantly (both the
+# daemon cwd /home/x/.daemon and any pm2 cwd sit under /home/x).
+RUN mkdir -p /home/x/node_modules/.bin \
+    && ln -sf /home/x/.npm-global/bin/chrome-devtools-mcp /home/x/node_modules/.bin/chrome-devtools-mcp \
+    && chown -R 1000:1000 /home/x/node_modules
+
 # ===== 15a. daytona daemon + computer-use plugin =====
 COPY docker/context/bin/daytona /usr/local/bin/daytona
 RUN chmod +x /usr/local/bin/daytona
