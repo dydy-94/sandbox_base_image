@@ -678,17 +678,18 @@ RUN NPX_BIN=$(find / -path "*node_modules/npm/bin/npx-cli.js" 2>/dev/null | head
 RUN echo "v13-fix9.11: mcp2rest NOT auto-started via supervisord; deploy hook spawns it" && \
     rm -f /opt/gem/supervisord/mcp2rest.conf
 
-# ===== 14r4. /opt/novnc/app/ overlay directory (for deploy-time ui.js swap) =====
-# The closed-source / deploy-time hook may scp a patched /opt/novnc/app/ui.js
-# to this path to replace the noVNC-shipped one. The nginx vnc.conf has a
-# `^~ /vnc/app/` location that prefers /opt/novnc/app/ over the baked
-# /opt/novnc/noVNC/app/ tree, so a custom ui.js here wins without rebuilding
-# the image. Without this directory, scp fails with ENOENT under no-root.
-RUN mkdir -p /opt/novnc/app && \
-    chown 1000:1000 /opt/novnc/app && \
+# ===== 14r4. /opt/novnc/app/ overlay directory (deploy-time ui.js swap + baked patch) =====
+# The deploy-time hook may scp a patched /opt/novnc/app/ui.js to this path to
+# replace the noVNC-shipped one. The nginx vnc.conf has a `^~ /vnc/app/`
+# location that prefers /opt/novnc/app/ over the baked /opt/novnc/noVNC/app/
+# tree, so a custom ui.js here wins without rebuilding the image.
+# v14: bake docker/context/novnc/app/ui.js (clipboard monitor patch) here so it
+# survives prepare-all.sh (which re-downloads the vanilla noVNC tree).
+COPY docker/context/novnc/app/ /opt/novnc/app/
+RUN chown 1000:1000 /opt/novnc/app && \
     chmod 755 /opt/novnc/app && \
     test -f /opt/novnc/app/.gitkeep || touch /opt/novnc/app/.gitkeep && \
-    echo "v13-fix9.11: /opt/novnc/app/ overlay dir created (chown x:x 755)"
+    echo "v14: /opt/novnc/app/ overlay baked with patched ui.js (chown x:x 755)"
 
 # ===== 14s. PYTHONHTTPSVERIFY off for vendored wheels fetch =====
 ENV PYTHONHTTPSVERIFY=0 \

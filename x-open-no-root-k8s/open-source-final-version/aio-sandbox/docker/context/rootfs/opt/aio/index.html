@@ -480,8 +480,9 @@
         class WorkspaceManager {
             constructor() {
                 // Order matters for layout - Code first (left), Browser second (right)
-                const codeEnabled = window.SANDBOX_CONFIG.disable_code_server !== 'true';
-                const jupyterEnabled = window.SANDBOX_CONFIG.disable_jupyter !== 'true';
+                // Code/Jupyter 面板固定隐藏（no-root 镜像已裁掉对应后端，不随环境变量显示）
+                const codeEnabled = false;
+                const jupyterEnabled = false;
 
                 this.panels = {
                     code: {

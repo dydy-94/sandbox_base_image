@@ -97,9 +97,12 @@ aio-sandbox/docker/context/chrome-deb/*
 !aio-sandbox/docker/context/chrome-deb/.gitkeep
 !aio-sandbox/docker/context/chrome-deb/.keep
 
-aio-sandbox/docker/context/novnc/
+aio-sandbox/docker/context/novnc/*
 !aio-sandbox/docker/context/novnc/.gitkeep
 !aio-sandbox/docker/context/novnc/.keep
+# custom overlay ui.js (clipboard monitor) stays tracked; noVNC upstream tree stays ignored
+!aio-sandbox/docker/context/novnc/app/
+!aio-sandbox/docker/context/novnc/app/ui.js
 
 aio-sandbox/docker/context/websocat/*
 !aio-sandbox/docker/context/websocat/.gitkeep
