@@ -58,10 +58,46 @@
 - `/etc/localtime` 软链 + `/etc/timezone` 写入
 - 注意：squash 阶段（Stage 6）`COPY --from=builder / /` 只带文件，**ENV 元数据不传递**，所以 final stage 必须显式再声明一次 `ENV TZ=Asia/Shanghai`（builder 与 final 两处都已添加）
 
-## 7. 离线化 & 启动优化（前期已完成）
+## 7. 离线化 & 启动优化
 
 - oras / fnm-node / node repl / global npm 全部离线预置，构建期固定权限
 - 运行时不再做重 chown（构建时固化），启动秒级完成
+
+### 7.1 离线包下载流程（构建前必须执行）
+
+所有大体积下载（apt .deb、pip wheels、npm tarballs、daytona 二进制、fnm+node）在**宿主机构建前**完成，Dockerfile 构建时只 COPY 这些预置资产并离线安装（`apt-get install --no-download`、`pip install --no-index --find-links`、`npm install --prefer-offline`）。
+
+**一键下载全部离线资产：**
+
+```bash
+bash docker/context/prepare-all.sh
+```
+
+内部按依赖顺序执行 5 步（每步失败会打印日志路径，可用 `SKIP_<NAME>=1` 跳过）：
+
+| # | 脚本 | 产出目录 | 内容 |
+|---|---|---|---|
+| 1 | `prepare-apt-archives.sh` | `docker/context/apt-archives/` | 769+ 个 apt .deb（含 chrome/noVNC/websocat/code-server） |
+| 2 | `prepare-wheels.sh` | `docker/context/wheels/` | python-server 运行期 pip wheels |
+| 3 | `prepare-npm.sh` | `docker/context/npm-tgz/` | aio / static-assets npm tarballs |
+| 4 | `prepare-daytona.sh` | `docker/context/bin/`、`docker/context/dist/libs/` | daytona daemon + computer-use 插件（必须是 Linux ELF 版） |
+| 5 | `prepare-fnm-node.sh` | `docker/context/` | fnm + node 22 tarball |
+
+下载完成后打印资产清单（文件数 + 大小）与日志位置（`docker/context/.prepare-logs/`）。
+
+**镜像源说明：**
+- 默认走 CN 镜像（TUNA / aliyun / npmmirror），失败自动回退上游官方源
+- 有内网私有源时用环境变量覆盖：`APT_MIRROR` / `NPM_REGISTRY` / `PIP_INDEX_URL`（如 cmbchina jaf 源）
+- Windows 宿主可替代：`prepare-npm.ps1`（npm 部分）
+
+**下载完成后构建：**
+
+```bash
+cd docker/../..   # 即 aio-sandbox 目录
+docker buildx build -f Dockerfile.final -t aio-sandbox:final-test --load .
+```
+
+> ⚠️ 注意：构建期仍有一小部分 `apt-get install` 作为非离线 fallback（如 libcrypt-dev 不在离线缓存中），需要构建机网络可达 CN 镜像。完全断网构建请先跑 `preflight-wheels.sh` 确认 wheels 完整性。
 
 ## 8. 验证方式
 

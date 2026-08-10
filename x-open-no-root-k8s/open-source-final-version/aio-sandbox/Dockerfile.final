@@ -317,11 +317,17 @@ RUN apt-get install -y --no-install-recommends curl unzip ca-certificates ncurse
         && unzip /tmp/fnm.zip -d /opt/fnm && chmod +x /opt/fnm/fnm; \
     fi; \
     if [ -x /opt/fnm/fnm ]; then \
-        if [ -f "/tmp/fnm-pre/node-v${NODE22_VERSION}-linux-${TARGETARCH}.tar.xz" ]; then \
+        # Node.js official tarballs are named {x64|arm64}, NOT Docker's
+        # TARGETARCH (amd64). Map amd64 -> x64 so the pre-staged offline
+        # tarball name matches; otherwise the offline path is skipped and
+        # `fnm install 22` pulls the newest 22.x, drifting from the pinned
+        # NODE22_VERSION (offline: 22.22.3 vs online: whatever is latest).
+        if [ "${TARGETARCH}" = "amd64" ]; then NODE_ARCH="x64"; else NODE_ARCH="${TARGETARCH:-x64}"; fi; \
+        if [ -f "/tmp/fnm-pre/node-v${NODE22_VERSION}-linux-${NODE_ARCH}.tar.xz" ]; then \
             echo "offline: extracting node v${NODE22_VERSION} from pre-staged tarball"; \
             mkdir -p /opt/nodejs/22 \
-            && tar -xJf "/tmp/fnm-pre/node-v${NODE22_VERSION}-linux-${TARGETARCH}.tar.xz" -C /tmp \
-            && cp -rLP /tmp/node-v${NODE22_VERSION}-linux-${TARGETARCH}/. /opt/nodejs/22/; \
+            && tar -xJf "/tmp/fnm-pre/node-v${NODE22_VERSION}-linux-${NODE_ARCH}.tar.xz" -C /tmp \
+            && cp -rLP /tmp/node-v${NODE22_VERSION}-linux-${NODE_ARCH}/. /opt/nodejs/22/; \
         else \
             /opt/fnm/fnm install 22 --node-dist-mirror https://npmmirror.com/mirrors/node; \
             mkdir -p /opt/nodejs/22; \
@@ -337,7 +343,7 @@ RUN apt-get install -y --no-install-recommends curl unzip ca-certificates ncurse
     #     --archive-name-format=v{version}-{arch}-{libc}-{runtime}.tar.gz || /opt/fnm/fnm install 24 --node-dist-mirror https://cdn.npmmirror.com/binaries/node \
     #     --archive-name-format=v{version}-{arch}-{libc}-{runtime}.tar.gz \
     #     || echo "WARN: node 24 install failed; falling back to v22 alias only" \
-    rm -rf /tmp/fnm.zip /tmp/fnm-pre /tmp/node-v${NODE22_VERSION}-linux-${TARGETARCH} /opt/fnm/.lastupdate \
+    rm -rf /tmp/fnm.zip /tmp/fnm-pre /tmp/node-v${NODE22_VERSION}-linux-${NODE_ARCH} /opt/fnm/.lastupdate \
     && (test -x /opt/nodejs/22/bin/node || { echo "FATAL: node22 missing after install"; exit 1; }) \
     && ln -sf /opt/nodejs/22/bin/node /usr/local/bin/node \
     && ln -sf /opt/nodejs/22/bin/npm  /usr/local/bin/npm \
@@ -840,8 +846,17 @@ RUN dpkg --purge --force-all \
            /home/x/.npm-global/lib/node_modules/tsx 2>/dev/null || true; \
     npm cache clean --force 2>/dev/null || true; \
     rm -rf /home/x/.npm/_cacache 2>/dev/null || true; \
-    apt-get update -qq 2>/dev/null && apt-get install -y --no-install-recommends vim-tiny 2>/dev/null || true; \
-    dpkg --purge --force-all vim vim-common vim-runtime 2>/dev/null || true; \
+    apt-get update -qq 2>/dev/null; \
+    if apt-get install -y --no-install-recommends vim-tiny; then \
+        echo "vim-tiny installed; dropping full vim"; \
+        dpkg --purge --force-all vim vim-runtime 2>/dev/null || true; \
+    else \
+        echo "WARN: vim-tiny install failed; keeping full vim"; \
+    fi; \
+    # vim-common MUST stay: it owns the vi/vim alternatives symlinks that
+    # vim-tiny relies on. Purging it is what broke `vi`/`vim` before.
+    update-alternatives --set vi /usr/bin/vim.tiny 2>/dev/null || true; \
+    update-alternatives --set vim /usr/bin/vim.tiny 2>/dev/null || true; \
     rm -rf /tmp/chrome-profile 2>/dev/null || true; \
     rm -f /usr/share/fonts/opentype/noto/NotoSerifCJK-ExtraLight.ttc \
           /usr/share/fonts/opentype/noto/NotoSerifCJK-Light.ttc \
@@ -918,10 +933,17 @@ ENV PUBLIC_PORT=8080 \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Internal mirror (招行 intranet) — switchable via build-arg
+# NOTE: this RUN runs as root with HOME=/home/x, so the files land in
+# /home/x but are owned by root. .npmrc is 0600 root → x (uid 1000, the
+# runtime user) canNOT read it and npm silently falls back to the public
+# registry. chown fixes both npm (0600) and pip (0644) configs.
 RUN npm config set registry http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/ \
     && pip config set global.index-url http://central.jaf.cmbchina.cn/artifactory/api/pypi/group-pypi/simple \
     && pip config set global.trusted-host central.jaf.cmbchina.cn \
-    && pip config set central.jaf.cmbchina.cn install.trusted-host
+    && pip config set central.jaf.cmbchina.cn install.trusted-host \
+    && chown 1000:1000 /home/x/.npmrc /home/x/.config/pip/pip.conf \
+    && chmod 600 /home/x/.npmrc \
+    && chmod 644 /home/x/.config/pip/pip.conf
 
 EXPOSE 8080 2280
 
