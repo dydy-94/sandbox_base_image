@@ -103,6 +103,8 @@ aio-sandbox/docker/context/novnc/*
 # custom overlay ui.js (clipboard monitor) stays tracked; noVNC upstream tree stays ignored
 !aio-sandbox/docker/context/novnc/app/
 !aio-sandbox/docker/context/novnc/app/ui.js
+# ui_fix.js (latest noVNC ui.js, replaces app/ui.js at build) must be tracked
+!aio-sandbox/docker/context/novnc/ui_fix.js
 
 aio-sandbox/docker/context/websocat/*
 !aio-sandbox/docker/context/websocat/.gitkeep
