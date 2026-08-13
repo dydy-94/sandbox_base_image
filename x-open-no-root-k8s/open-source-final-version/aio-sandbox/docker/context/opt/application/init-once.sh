@@ -79,7 +79,7 @@ fi
 
 # ---------- 5. handoff to run.sh (which execs supervisord as PID 1) ----------
 # run.sh exports the %(ENV_*)s interpolation vars used by supervisord child
-# configs (AUTOSTART_*, VNC ports, browser ports, pm2 pre-warm, gost cleanup,
+# configs (AUTOSTART_*, VNC ports, browser ports, pm2 pre-warm,
 # RUN_HOOK_*) and then `exec supervisord -n -c ${SUPERVISORD_CONF}`. supervisord
 # itself drops to ${RUNTIME_USER} via `user=x` in ${SUPERVISORD_CONF}.
 log "handing off to /opt/application/run.sh (supervisord will drop to ${RUNTIME_USER} via user=x)"

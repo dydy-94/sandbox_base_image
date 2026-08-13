@@ -156,14 +156,15 @@ RUN mkdir -p /var/cache/apt/archives && (cp -an /opt/apt-archives/*.deb /var/cac
 # build-essential) isn't in the offline cache, so online fallback is mandatory.
 # python-server removed: dropped cmake/ninja/meson/gettext/gawk/libffi-dev/
 # libcairo2-dev/libpango1.0-dev/freeglut3-dev (only used for python-server wheels).
-RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== apt-get install attempt $try ==="; if apt-get install -y --no-install-recommends --fix-missing build-essential gcc make pkg-config python3-dev ca-certificates curl wget git gh jq file unzip zip tree htop lsof psmisc sudo software-properties-common gnupg vim net-tools netcat-openbsd iputils-ping telnet ripgrep python3 python3-venv python3-dev python3-pip nginx supervisor tigervnc-standalone-server openbox autocutsel x11-utils x11-xserver-utils xauth xclip xdotool xdg-utils gnome-screenshot im-config dbus dbus-x11 fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-qt5 ffmpeg libopenal1 libfreetype6 imagemagick libnss3 libnspr4 libgbm1 libdrm2 libgtk-3-0t64 libasound2t64 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libwayland-client0 libvulkan1 libxext6 libxv1 libgcrypt20 libglib2.0-0t64 libgl1 libcairo2 libpango-1.0-0 fontconfig fonts-dejavu fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji xfonts-intl-chinese locales tzdata 2>&1 | tail -8; then ok=1; break; fi; sleep 5; done; [ $ok = 0 ] && echo WARN_apk_install_failed; \
+RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== apt-get install attempt $try ==="; if apt-get install -y --no-install-recommends --fix-missing build-essential gcc make pkg-config python3-dev ca-certificates curl wget git gh jq file unzip zip tree htop lsof psmisc sudo software-properties-common gnupg vim net-tools netcat-openbsd iputils-ping telnet ripgrep python3 python3-venv python3-dev python3-pip nginx supervisor tigervnc-standalone-server openbox autocutsel x11-utils x11-xserver-utils xauth xclip xdotool xdg-utils gnome-screenshot im-config dbus dbus-x11 fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-qt5 ffmpeg libopenal1 libfreetype6 imagemagick libnss3 libnspr4 libgbm1 libdrm2 libgtk-3-0t64 libasound2t64 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libwayland-client0 libvulkan1 libxext6 libxv1 libgcrypt20 libglib2.0-0t64 libgl1 libcairo2 libpango-1.0-0 fontconfig fonts-dejavu fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji xfonts-intl-chinese locales tzdata bubblewrap openssh-client 2>&1 | tail -8; then ok=1; break; fi; sleep 5; done; [ $ok = 0 ] && echo WARN_apk_install_failed; \
     command -v python3 >/dev/null 2>&1 && \
     command -v curl    >/dev/null 2>&1 && \
     command -v wget    >/dev/null 2>&1 && \
     command -v git     >/dev/null 2>&1 && \
     command -v jq      >/dev/null 2>&1 && \
     command -v nginx   >/dev/null 2>&1 && \
-    command -v supervisord >/dev/null 2>&1'
+    command -v supervisord >/dev/null 2>&1 && \
+    command -v bwrap   >/dev/null 2>&1'
 
 RUN rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* 2>/dev/null || true; \
     rm -rf /opt/apt-archives 2>/dev/null || true
@@ -253,7 +254,7 @@ ENV PUBLIC_PORT=8080 \
     BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
     PUPPETEER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
     AGENT_BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
-    BROWSER_COMMANDLINE_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --remote-allow-origins=* --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --start-maximized" \
+    BROWSER_COMMANDLINE_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --remote-allow-origins=* --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --start-maximized --disable-blink-features=AutomationController --disable-features=IPH_DesktopCustomizeChrome,IsolateOrigins,site-per-process --disable-focus-on-load --disable-infobars --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-site-isolation-trials --disable-window-activation --mute-audio --suppress-message-center-popups --homepage=about:blank --disable-background-timer-throttling --disable-external-intent-requests" \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN bash -c 'set +e; \
     userdel -r ubuntu 2>/dev/null; groupdel ubuntu 2>/dev/null; \
@@ -261,16 +262,91 @@ RUN bash -c 'set +e; \
     if ! id -u x >/dev/null 2>&1; then useradd -m -s /bin/bash -u ${USER_UID:-1000} -g x x; else echo "x user already exists, reusing"; fi; \
     mkdir -p /etc/supervisor/conf.d; chown -R 1000:1000 /etc/supervisor /home/x 2>/dev/null || true; exit 0'
 
+# ===== 4a. x has NO sudo (fully unprivileged) =====
+# x is NOT a member of the sudo group and has NO sudoers entries: code
+# running as x (browser pages, pasted commands) can never escalate to root,
+# whether the container boots as root (docker) or uid-1000 (k8s runAsUser).
+# No chpasswd, no /etc/sudoers.d/x. The sudo(8) binary stays installed (part
+# of the §2 apt list) but is unusable without a sudoers rule.
+
+# ===== 4b. bwrap (bubblewrap) directory-isolation sandbox =====
+# bwrap ships in the §2 apt list. It runs rootless via unprivileged user
+# namespaces, which the kernel must allow (kernel.unprivileged_userns_clone=1
+# on some kernels/distros). x has no sudo, so this cannot be flipped at
+# runtime — attempt it once here at build time; inside a non-privileged
+# build/container /proc/sys is read-only, in which case the platform must
+# grant userns via k8s securityContext.sysctls / privileged / seccomp.
+RUN { sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null \
+        && echo "userns sysctl OK at build time"; } \
+    || echo "WARN: cannot set kernel.unprivileged_userns_clone=1 (read-only /proc/sys); platform must grant userns"; \
+    bwrap --version
+
 # ===== 5. copy uv binary from Stage 1 =====
 COPY --from=uvbin /uv /uvx /usr/local/bin/
 
 # ===== 6. python interpreters =====
-RUN mkdir -p /opt/python3.13/bin /opt/python3/bin && \
-    for src in /usr/local/bin/python3.13 /usr/local/bin/python3; do \
-        [ -e "$src" ] || continue; \
-    done; \
-    ln -sf /usr/local/bin/python3.13 /opt/python3.13/bin/python3.13 && \
-    ln -sf /usr/local/bin/python3 /opt/python3/bin/python3
+# ubuntu:26.04 (resolute) ships ONLY python3 = 3.14 — no python3.13 in the
+# distro repos, and GitHub (python-build-standalone) is unreachable from the
+# build network. Compile python 3.13 from source via the aliyun mirror.
+# /opt/python3.13/bin/python3.13 is the canonical 3.13 entrypoint (real
+# binary, --enable-shared + rpath so it finds libpython3.13.so);
+# /opt/python3/bin/python3 aliases the distro python3 (3.14).
+ARG PY313_PATCH=9
+RUN apt-get install -y --no-install-recommends \
+        libssl-dev zlib1g-dev libbz2-dev libffi-dev liblzma-dev \
+        libreadline-dev libsqlite3-dev libncurses-dev libgdbm-dev libdb-dev 2>/dev/null \
+        || echo "WARN: python build deps install failed; build may fail"; \
+    mkdir -p /opt/python3.13/bin /opt/python3/bin; \
+    if curl -fsSL -m 600 -o /tmp/py.tgz \
+            "https://mirrors.aliyun.com/python-release/source/Python-${PY313_VERSION}.${PY313_PATCH}.tgz" \
+        && tar -zxf /tmp/py.tgz -C /tmp \
+        && cd /tmp/Python-${PY313_VERSION}.${PY313_PATCH} \
+        && ./configure --prefix=/opt/python3.13 --enable-shared \
+                LDFLAGS="-Wl,-rpath,/opt/python3.13/lib" >/dev/null 2>&1 \
+        && make -j"$(nproc)" >/dev/null 2>&1 \
+        && make install >/dev/null 2>&1; then \
+        echo "python ${PY313_VERSION}.${PY313_PATCH} built from source OK"; \
+    else \
+        echo "WARN: python ${PY313_VERSION} build failed; /opt/python3.13/bin stays empty"; \
+    fi; \
+    rm -rf /tmp/py.tgz /tmp/Python-${PY313_VERSION}.${PY313_PATCH}; \
+    ln -sfn /usr/bin/python3 /opt/python3/bin/python3; \
+    /opt/python3.13/bin/python3.13 --version 2>/dev/null || echo "WARN: python3.13 unavailable"; \
+    /opt/python3/bin/python3 --version
+
+# ===== 6a. unify the whole python ecosystem to 3.13 =====
+# distro python3 stays python3.14 under the hood (dpkg dependency integrity),
+# but EVERY user-facing entrypoint now resolves to the source-built 3.13:
+# python3 / python / python3-config / pip3 / pip. supervisor + fastmcp were
+# installed under 3.14 earlier in the build (§2c) — reinstalling them via the
+# 3.13 pip keeps supervisord and the mcp tooling working under 3.13.
+ARG PIP_INDEX_URL
+RUN ln -sfn /opt/python3.13/bin/python3.13 /usr/bin/python3 && \
+    ln -sfn /opt/python3.13/bin/python3.13 /usr/bin/python && \
+    ln -sfn /opt/python3.13/bin/python3.13-config /usr/bin/python3-config && \
+    ln -sfn /opt/python3.13/bin/pip3.13 /usr/bin/pip3 && \
+    ln -sfn /opt/python3.13/bin/pip3.13 /usr/bin/pip && \
+    ln -sfn /opt/python3.13/bin/python3.13 /opt/python3/bin/python3 && \
+    pip3 install --no-cache-dir --retries 3 --timeout 60 supervisor \
+        --index-url ${PIP_INDEX_URL} \
+    || pip3 install --no-cache-dir supervisor \
+    || echo "WARN: supervisor 3.13 reinstall failed; supervisord may not start"; \
+    pip3 install --no-cache-dir --retries 3 --timeout 60 fastmcp \
+        --index-url ${PIP_INDEX_URL} \
+    || pip3 install --no-cache-dir fastmcp \
+    || echo "WARN: fastmcp 3.13 reinstall failed; continuing"; \
+    # nacos-sdk-python: must keep the classic `import nacos` API. 3.x
+    # (latest) switched to a namespaced v2.nacos import, and no 1.1.0+
+    # exists on the 1.x line (1.x caps at 1.0.0) — so pin <3 to land on
+    # 2.0.11, which still ships the classic nacos/ top-level package.
+    pip3 install --no-cache-dir --retries 3 --timeout 60 "PyYAML>=6.0" "nacos-sdk-python>=1.1.0,<3" \
+        --index-url ${PIP_INDEX_URL} \
+    || pip3 install --no-cache-dir "PyYAML>=6.0" "nacos-sdk-python>=1.1.0,<3" \
+    || echo "WARN: PyYAML/nacos-sdk-python install failed; continuing"; \
+    python3 -c "import yaml, nacos; print('PyYAML', yaml.__version__, '| nacos-sdk-python', nacos.__version__)" 2>/dev/null \
+    || echo "WARN: PyYAML/nacos import check failed"; \
+    python3 --version && pip3 --version && \
+    /usr/bin/supervisord --version
 
 # ===== 7. fnm + node (multi-version) =====
 # NOTE: we deliberately do NOT apt-get install chromium-browser here. The
@@ -361,6 +437,11 @@ RUN bash -uc 'shopt -s nullglob; DEBS=(/opt/chrome-deb/*.deb); if [ "${#DEBS[@]}
 
 RUN bash -euc 'if [ ! -d /opt/novnc/noVNC ] && [ -d /opt/novnc ] && ls /opt/novnc/* >/dev/null 2>&1; then mkdir -p /opt/novnc/noVNC && cp -r /opt/novnc/. /opt/novnc/noVNC/ 2>/dev/null || true; fi; echo "noVNC staging done"'
 RUN ln -sf vnc.html /opt/novnc/noVNC/index.html 2>/dev/null; echo "noVNC index.html symlink created"
+# ui_fix.js: user-provided latest noVNC app/ui.js, kept as a dedicated file
+# at docker/context/novnc/ui_fix.js so prepare-all.sh re-downloads (which
+# overwrites docker/context/novnc/noVNC/app/ui.js) can never clobber it.
+# Replace the noVNC-shipped ui.js right after installation.
+COPY docker/context/novnc/ui_fix.js /opt/novnc/noVNC/app/ui.js
 
 RUN bash -euc 'if [ -f /opt/websocat/websocat-x86_64-unknown-linux-musl ]; then install -m 0755 /opt/websocat/websocat-x86_64-unknown-linux-musl /usr/local/bin/websocat; else echo "WARN: websocat binary missing"; fi'
 
@@ -563,8 +644,10 @@ RUN mkdir -p \
 #   * /var/lib/aio-sandbox/nginx  -> nginx body/proxy/fastcgi/scgi/uwsgi temp (nobody)
 #   * /var/lib/nginx              -> nginx cache dir (nobody, world-writable)
 #   * /run/user/1000              -> XDG_RUNTIME_DIR + dbus session socket
-#   * /etc/browser/policies/managed -> chrome enterprise policies
-#   * /opt/gem                    -> runtime-written gost/nginx configs
+#   * /etc/opt/chrome/policies/managed -> chrome enterprise policies
+#     (google-chrome-stable deb reads THIS path, not /etc/browser/policies/
+#     managed; pre-created + chowned so uid-1000 x can push policies at runtime)
+#   * /opt/gem                    -> runtime-written nginx configs
 RUN mkdir -p \
         /var/lib/aio-sandbox/nginx/body \
         /var/lib/aio-sandbox/nginx/proxy \
@@ -573,9 +656,16 @@ RUN mkdir -p \
         /var/lib/aio-sandbox/nginx/uwsgi \
         /var/lib/nginx \
         /run/user/1000 \
-        /etc/browser/policies/managed && \
+        /etc/opt/chrome/policies/managed \
+        /home/x/.ssh && \
+    # Empty placeholder so the policy dir is never empty / missing; runtime
+    # run.sh overwrites url_filter.json / dns_over_https.json from env.
+    echo '{}' > /etc/opt/chrome/policies/managed/url_filter.json && \
     chown 1000:1000 /var/lib/aio-sandbox /var/lib/nginx /run/user/1000 \
-                    /etc/browser/policies/managed && \
+                    /etc/opt/chrome/policies/managed \
+                    /etc/opt/chrome/policies/managed/url_filter.json \
+                    /home/x/.ssh && \
+    chmod 700 /home/x/.ssh && \
     chown nobody:nogroup /var/lib/aio-sandbox/nginx /var/lib/aio-sandbox/nginx/* && \
     chmod 755 /var/lib/aio-sandbox /var/lib/aio-sandbox/nginx && \
     chmod 700 /run/user/1000 /var/lib/aio-sandbox/nginx/* && \
@@ -691,6 +781,15 @@ RUN chown 1000:1000 /opt/novnc/app && \
     test -f /opt/novnc/app/.gitkeep || touch /opt/novnc/app/.gitkeep && \
     echo "v14: /opt/novnc/app/ overlay baked with patched ui.js (chown x:x 755)"
 
+# ===== 14r5. propagate ui_fix.js into the /opt/novnc/app/ overlay =====
+# nginx vnc.conf serves /vnc/app/ui.js from /opt/novnc/app/ui.js (NOT the
+# baked /opt/novnc/noVNC/app/ui.js tree), so the §9 ui_fix.js replacement
+# must also land in the overlay, which §14r4 just re-baked from the older
+# docker/context/novnc/app/ui.js (clipboard-monitor patch).
+RUN cp -f /opt/novnc/noVNC/app/ui.js /opt/novnc/app/ui.js && \
+    chown 1000:1000 /opt/novnc/app/ui.js && chmod 644 /opt/novnc/app/ui.js && \
+    echo "14r5: ui_fix.js propagated to /opt/novnc/app/ui.js (nginx-served copy)"
+
 # ===== 14s. PYTHONHTTPSVERIFY off for vendored wheels fetch =====
 ENV PYTHONHTTPSVERIFY=0 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -766,25 +865,25 @@ RUN rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* \
     rm -rf /root/.npm /root/.node-gyp 2>/dev/null || true; \
     rm -rf /var/log/apt/* /var/log/dpkg.log /var/log/bootstrap.log 2>/dev/null || true; \
     rm -rf /usr/share/doc/* /usr/share/man/* 2>/dev/null || true; \
-    find /usr/lib /lib -name '*.a' -type f -delete 2>/dev/null || true; \
+    # Delete static libs EXCEPT /usr/lib/gcc/** and libc_nonshared.a:
+    # gcc linking needs libgcc.a/libgcc_eh.a (`-lgcc`) AND glibc's
+    # libc_nonshared.a (__register_atfork etc.) — removing them breaks every
+    # compile ("cannot find -lgcc" / "cannot find libc_nonshared.a").
+    find /usr/lib /lib -name '*.a' ! -path '/usr/lib/gcc/*' \
+        ! -name 'libc_nonshared.a' -type f -delete 2>/dev/null || true; \
     rm -rf /usr/share/locale/?? /usr/share/locale/??_?? \
            /usr/share/locale/??_??.* /usr/share/locale/en@* \
            /usr/share/locale/[^a]* 2>/dev/null || true; \
     echo "image cleanup done"
 
-# ===== 18. Deep cleanup: drop unused apt packages for size =====
-RUN dpkg --purge --force-all \
-        fonts-urw-base35 \
-        snapd chromium-browser \
-        libflite1 libgs10 libqt5gui5t64 \
-        rust-coreutils \
-        gcc-15 g++-15 cpp-15 \
-        gcc-15-x86-64-linux-gnu g++-15-x86-64-linux-gnu cpp-15-x86-64-linux-gnu \
-        libstdc++-15-dev libgcc-15-dev libc6-dev \
-        libpython3.14-dev libicu-dev libgio-2.0-dev gir1.2-glib-2.0-dev \
-        build-essential \
-        2>/dev/null || true; \
-    npm uninstall -g typescript tsx 2>/dev/null || true; \
+# ===== 18. Deep cleanup: drop unused files for size =====
+# NOTE: NO dpkg --purge of toolchain/system packages here. Purging gcc-15 /
+# g++-15 / cpp-15 / libc6-dev / build-essential left meta packages (gcc, g++,
+# cpp) with dangling /usr/bin/gcc -> gcc-15 symlinks AND a broken apt state
+# (ffmpeg/qt/etc. deps gone), so `gcc` vanished and any future
+# `sudo apt-get install` failed. gcc must stay for the sandbox user, so we
+# keep all packages and only delete caches/unused files.
+RUN npm uninstall -g typescript tsx 2>/dev/null || true; \
     rm -rf /home/x/.npm-global/lib/node_modules/bun \
            /home/x/.npm-global/lib/node_modules/typescript \
            /home/x/.npm-global/lib/node_modules/tsx 2>/dev/null || true; \
@@ -811,7 +910,9 @@ RUN dpkg --purge --force-all \
           /usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc \
           2>/dev/null || true; \
     rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* 2>/dev/null || true; \
-    rm -rf /usr/libexec/gcc /usr/include/* /opt/nodejs/22/include \
+    # NOTE: /usr/libexec/gcc and /usr/include MUST stay — gcc's internal
+    # compiler binaries (cc1, cc1plus, collect2) and C headers live there.
+    rm -rf /opt/nodejs/22/include \
            /opt/fnm /usr/libexec/glycin-loaders \
            /usr/lib/cargo \
            2>/dev/null || true; \
@@ -819,16 +920,13 @@ RUN dpkg --purge --force-all \
           /usr/bin/snap /usr/bin/ctest /usr/bin/cpack /usr/bin/cmake \
           /usr/bin/pebble \
           2>/dev/null || true; \
-    dpkg --purge --force-all libasan8 libtsan2 libcodec2-1.2 libgtkd-3-0 libplacebo360 2>/dev/null || true; \
-    rm -f /usr/lib/x86_64-linux-gnu/libasan.so* /usr/lib/x86_64-linux-gnu/libtsan.so* \
-          /usr/lib/x86_64-linux-gnu/libcodec2.so* /usr/lib/x86_64-linux-gnu/libgtkd-3.so* \
-          /usr/lib/x86_64-linux-gnu/libplacebo.so* \
-          2>/dev/null || true; \
     rm -rf /usr/lib/udev /usr/share/gir-1.0 /usr/lib/file 2>/dev/null || true; \
     rm -f /usr/local/bin/uv /usr/local/bin/uvx 2>/dev/null || true; \
     find /usr/share/terminfo -type f ! -name 'xterm*' ! -name 'vt100*' ! -name 'linux*' ! -name 'screen*' -delete 2>/dev/null || true; \
     find /usr/share/i18n/locales -type f ! -name 'en_*' ! -name 'zh_*' ! -name 'i18n' ! -name 'iso14651_t1*' -delete 2>/dev/null || true; \
     rm -rf /usr/share/icons/Adwaita /usr/share/icons/AdwaitaLegacy 2>/dev/null || true; \
+    apt-get check >/dev/null 2>&1 && echo "apt OK" || echo "WARN: apt unmet deps"; \
+    command -v gcc && gcc --version | head -1; \
     echo "deep cleanup done"
 
 # (Removed — was rebuilding .pyc cache for python-server venv)
@@ -873,8 +971,23 @@ ENV PUBLIC_PORT=8080 \
     BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
     PUPPETEER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
     AGENT_BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome \
-    BROWSER_COMMANDLINE_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --remote-allow-origins=* --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --start-maximized" \
+    BROWSER_COMMANDLINE_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu --remote-allow-origins=* --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --start-maximized --disable-blink-features=AutomationController --disable-features=IPH_DesktopCustomizeChrome,IsolateOrigins,site-per-process --disable-focus-on-load --disable-infobars --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-site-isolation-trials --disable-window-activation --mute-audio --suppress-message-center-popups --homepage=about:blank --disable-background-timer-throttling --disable-external-intent-requests" \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
+# Image version + supervisor runtime user (declared here in the final stage:
+# the squash stage only COPYs files from builder, ENV metadata does NOT
+# carry over).
+ENV AIO_SANDBOX_VERSION=0.2.0 \
+    SUPERVISOR_USER=x
+
+# pip: redirect "global" installs to the per-user base so uid-1000 x can
+# `pip install <pkg>` with no root. PEP 668 (EXTERNALLY-MANAGED) would still
+# block even --user mode, so break-system-packages is enabled (user-level
+# installs into /home/x/.local, system tree untouched). Verified at runtime:
+# pip install --dry-run six -> "Would install six-1.17.0".
+ENV PIP_USER=1 \
+    PYTHONUSERBASE=/home/x/.local \
+    PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Internal mirror (招行 intranet) — switchable via build-arg
 # NOTE: this RUN runs as root with HOME=/home/x, so the files land in

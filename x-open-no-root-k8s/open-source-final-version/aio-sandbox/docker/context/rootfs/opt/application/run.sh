@@ -268,22 +268,9 @@ fi
 export WORKSPACE="${WORKSPACE:-/home/$USER}"
 export BROWSER_DOWNLOAD_DIR_EFFECTIVE="${BROWSER_DOWNLOAD_DIR:-${WORKSPACE}/Downloads}"
 
-# Configure sudo for the sandbox user WITHOUT passwordless root:
-#   - x gets a login password (default 'x123456', override with X_USER_PASSWORD)
-#   - sudoers grants `x ALL=(ALL) ALL` → sudo works but ALWAYS asks for the password
-# No NOPASSWD entry: code running as x (browser pages, pasted commands) can no
-# longer escalate to root silently. sudo still logs every use via /var/log/auth.log.
-export X_USER_PASSWORD="${X_USER_PASSWORD:-X@2026@2026}"
-if [ -w /etc/sudoers.d ]; then
-  mkdir -p /etc/sudoers.d
-  echo "$USER ALL=(ALL) ALL" > /etc/sudoers.d/$USER
-  chmod 440 /etc/sudoers.d/$USER
-  printf '%s:%s\n' "$USER" "$X_USER_PASSWORD" | chpasswd 2>/dev/null \
-    && log "sudo: user '$USER' password set (X_USER_PASSWORD), NOPASSWD disabled" \
-    || log "WARN: chpasswd failed for '$USER'; sudo password auth may not work"
-else
-  log "Warning: Cannot modify sudoers (running in restricted environment)"
-fi
+# x has NO sudo: not in the sudo group, no sudoers entries. Code running as
+# x (browser pages, pasted commands) can never escalate to root, whether the
+# container boots as root (docker) or uid-1000 (k8s runAsUser:1000).
 # Ensure home directory is owned by the user (volume mounts may be root-owned).
 # Tolerate ':$USER' group syntax when only the user (uid) exists: chown
 # falls back to user-only if the group doesn't exist.
@@ -510,21 +497,31 @@ EOF
 ) &
 PID_USER_SETUP=$!
 
+# bwrap (bubblewrap) runs rootless via unprivileged user namespaces. x has
+# no sudo and /proc/sys is read-only in non-privileged containers, so the
+# kernel flag must be granted by the platform (k8s securityContext.sysctls /
+# privileged / seccomp=unconfined). Nothing to do here at boot.
+
 # Group B: DNS + Nginx Configuration (independent, runs as root)
 (
+  # Chrome enterprise policies live in /etc/opt/chrome/policies/managed
+  # (google-chrome-stable deb; NOT /etc/browser/policies/managed which is the
+  # chromium path). Pre-created at build time so uid-1000 x can write it.
+  CHROME_POLICY_DIR=/etc/opt/chrome/policies/managed
+
   # DNS over HTTPS Configuration
   TRIMMED_DOH_TEMPLATES="$(echo -n "$DNS_OVER_HTTPS_TEMPLATES" | xargs)"
   if [ -n "$TRIMMED_DOH_TEMPLATES" ]; then
-    if [ -w /etc/browser/policies/managed ] 2>/dev/null || [ "$(id -u)" = "0" ]; then
-      mkdir -p /etc/browser/policies/managed
-      cat >/etc/browser/policies/managed/dns_over_https.json <<DOHEOF
+    if [ -w "$CHROME_POLICY_DIR" ] 2>/dev/null || [ "$(id -u)" = "0" ]; then
+      mkdir -p "$CHROME_POLICY_DIR"
+      cat >"$CHROME_POLICY_DIR/dns_over_https.json" <<DOHEOF
 {
   "DnsOverHttpsMode": "secure",
   "DnsOverHttpsTemplates": "$TRIMMED_DOH_TEMPLATES"
 }
 DOHEOF
     else
-      log "WARNING: skip DoH policy (no write access to /etc/browser as uid $(id -u))"
+      log "WARNING: skip DoH policy (no write access to $CHROME_POLICY_DIR as uid $(id -u))"
     fi
   fi
 
@@ -532,7 +529,7 @@ DOHEOF
   TRIMMED_BLOCKLIST="$(echo -n "${BROWSER_URL_BLOCKLIST:-}" | xargs)"
   TRIMMED_ALLOWLIST="$(echo -n "${BROWSER_URL_ALLOWLIST:-}" | xargs)"
   if [ -n "$TRIMMED_BLOCKLIST" ] || [ -n "$TRIMMED_ALLOWLIST" ]; then
-    if [ -w /etc/browser/policies/managed ] 2>/dev/null || [ "$(id -u)" = "0" ]; then
+    if [ -w "$CHROME_POLICY_DIR" ] 2>/dev/null || [ "$(id -u)" = "0" ]; then
       URL_POLICY="{}"
       if [ -n "$TRIMMED_BLOCKLIST" ]; then
         URL_POLICY=$(echo "$URL_POLICY" | jq --argjson list "$(echo "$TRIMMED_BLOCKLIST" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$";""))')" '.URLBlocklist = $list')
@@ -540,9 +537,9 @@ DOHEOF
       if [ -n "$TRIMMED_ALLOWLIST" ]; then
         URL_POLICY=$(echo "$URL_POLICY" | jq --argjson list "$(echo "$TRIMMED_ALLOWLIST" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$";""))')" '.URLAllowlist = $list')
       fi
-      echo "$URL_POLICY" > /etc/browser/policies/managed/url_filter.json
+      echo "$URL_POLICY" > "$CHROME_POLICY_DIR/url_filter.json"
     else
-      log "WARNING: skip URL policy (no write access to /etc/browser as uid $(id -u))"
+      log "WARNING: skip URL policy (no write access to $CHROME_POLICY_DIR as uid $(id -u))"
     fi
   fi
 
@@ -743,356 +740,11 @@ fi
 timing_checkpoint "env_vars_setup"
 
 # ----------------------
-# GOST Proxy Configuration (replaces tinyproxy)
+# HTTP(S) proxy (gost) removed from the final image (no binary, no conf).
+# nginx.conf unconditionally includes /opt/gem/nginx-proxy-map.conf, so keep
+# an (empty) file there or nginx would fail to start.
 # ----------------------
-PROXY_SERVER="$(echo -n "$PROXY_SERVER" | xargs)"
-if [ -n "${PROXY_SERVER}" ]; then
-  PROXY_SERVER=${PROXY_SERVER#\"}
-  PROXY_SERVER=${PROXY_SERVER%\"}
-  PROXY_SERVER=${PROXY_SERVER#http://}
-  PROXY_SERVER=${PROXY_SERVER#https://}
-
-  GOST_CONFIG="/opt/gem/gost.yaml"
-  GOST_HOSTS_FILE="/opt/gem/gost-hosts.txt"
-  GOST_BYPASS_FILE="/opt/gem/gost-bypass.txt"
-  PROXY_MAP_JSON="/var/lib/aio-sandbox/proxy-map.json"
-  NGINX_PROXY_MAP_CONF="/opt/gem/nginx-proxy-map.conf"
-  PROXY_PORT="${TINYPROXY_PORT:-8118}"
-  NGINX_PROXY_MAP_PORT=80
-
-  USER_BYPASS_JSON="/var/lib/aio-sandbox/proxy-map-user-bypasses.json"
-
-  # Initialize files
-  > "${GOST_HOSTS_FILE}"
-  > "${GOST_BYPASS_FILE}"
-  > "${NGINX_PROXY_MAP_CONF}"
-  echo "[]" > "${PROXY_MAP_JSON}"
-  echo "[]" > "${USER_BYPASS_JSON}"
-
-  # --- Generate self-signed TLS cert for proxy-map HTTPS termination ---
-  PROXY_MAP_TLS_KEY="/opt/gem/proxy-map-tls.key"
-  PROXY_MAP_TLS_CRT="/opt/gem/proxy-map-tls.crt"
-
-  openssl req -x509 -newkey rsa:2048 -nodes \
-    -keyout "${PROXY_MAP_TLS_KEY}" \
-    -out "${PROXY_MAP_TLS_CRT}" \
-    -days 3650 -subj "/CN=AIO Sandbox Proxy Map" \
-    2>/dev/null
-
-  # Extract SPKI hash — tells Chromium to trust this specific key for any hostname
-  PROXY_MAP_SPKI=$(openssl x509 -in "${PROXY_MAP_TLS_CRT}" -pubkey -noout \
-    | openssl pkey -pubin -outform DER \
-    | openssl dgst -sha256 -binary \
-    | base64)
-
-  log "Generated proxy-map TLS cert (SPKI: ${PROXY_MAP_SPKI})"
-
-  # --- PROXY_AUTH_CMD: execute a shell command to obtain proxy credentials ---
-  # The command stdout should be "username:password".
-  # The result is prepended to PROXY_SERVER as user:pass@host:port.
-  PROXY_AUTH_CMD="${PROXY_AUTH_CMD:-}"
-  if [ -n "${PROXY_AUTH_CMD}" ] && [ "${PROXY_SERVER}" != "true" ]; then
-    PROXY_AUTH_STDERR=$(mktemp)
-    PROXY_AUTH_RESULT=$(bash -c "${PROXY_AUTH_CMD}" 2>"${PROXY_AUTH_STDERR}") || {
-      log "WARNING: PROXY_AUTH_CMD failed: $(cat "${PROXY_AUTH_STDERR}")"
-    }
-    rm -f "${PROXY_AUTH_STDERR}"
-    if [ -n "${PROXY_AUTH_RESULT}" ]; then
-      # Strip any existing auth from PROXY_SERVER before injecting
-      PROXY_SERVER_CLEAN="${PROXY_SERVER}"
-      if [[ "${PROXY_SERVER_CLEAN}" == *"@"* ]]; then
-        PROXY_SERVER_CLEAN="${PROXY_SERVER_CLEAN##*@}"
-      fi
-      PROXY_SERVER="${PROXY_AUTH_RESULT}@${PROXY_SERVER_CLEAN}"
-      log "PROXY_AUTH_CMD: injected auth into PROXY_SERVER (addr=${PROXY_SERVER_CLEAN})"
-    else
-      log "WARNING: PROXY_AUTH_CMD returned empty output, skipping auth injection"
-    fi
-  fi
-
-  # --- Parse PROXY_SERVER auth credentials ---
-  # PROXY_SERVER may be in the format user:pass@host:port (e.g. from rd-proxy/ZTI).
-  # GOST requires addr to be host:port only; auth goes in connector.auth.
-  PROXY_ADDR="${PROXY_SERVER}"
-  PROXY_AUTH_USER=""
-  PROXY_AUTH_PASS=""
-  if [[ "${PROXY_SERVER}" == *"@"* ]] && [ "${PROXY_SERVER}" != "true" ]; then
-    PROXY_AUTH_PART="${PROXY_SERVER%@*}"
-    PROXY_ADDR="${PROXY_SERVER##*@}"
-    # Only parse auth if the part before @ contains a colon (user:pass)
-    if [[ "${PROXY_AUTH_PART}" == *":"* ]]; then
-      PROXY_AUTH_USER="${PROXY_AUTH_PART%%:*}"
-      PROXY_AUTH_PASS="${PROXY_AUTH_PART#*:}"
-    fi
-    if [ -n "${PROXY_AUTH_USER}" ] && [ -n "${PROXY_AUTH_PASS}" ]; then
-      log "Parsed PROXY_SERVER: addr=${PROXY_ADDR}, auth_user=${PROXY_AUTH_USER:0:10}..."
-    else
-      log "WARNING: PROXY_SERVER contains '@' but auth credentials are incomplete, ignoring auth"
-      PROXY_AUTH_USER=""
-      PROXY_AUTH_PASS=""
-    fi
-  fi
-
-  # --- Generate GOST config ---
-  cat > "${GOST_CONFIG}" <<GOST_YAML_EOF
-api:
-  addr: "127.0.0.1:18080"
-
-services:
-  - name: browser-proxy
-    addr: "127.0.0.1:${PROXY_PORT}"
-    handler:
-      type: http
-$(if [ "${PROXY_SERVER}" != "true" ]; then echo "      chain: upstream"; fi)
-    listener:
-      type: tcp
-    hosts: proxy-map
-
-$(if [ "${PROXY_SERVER}" != "true" ]; then cat <<CHAIN_INNER_EOF
-chains:
-  - name: upstream
-    hops:
-      - name: hop-0
-        bypass: proxy-bypass
-        nodes:
-          - name: upstream-proxy
-            addr: "${PROXY_ADDR}"
-            connector:
-              type: http
-$(if [ -n "${PROXY_AUTH_USER}" ]; then cat <<AUTH_EOF
-              auth:
-                username: "${PROXY_AUTH_USER}"
-                password: "${PROXY_AUTH_PASS}"
-AUTH_EOF
-fi)
-            dialer:
-              type: tcp
-CHAIN_INNER_EOF
-fi)
-
-hosts:
-  - name: proxy-map
-    reload: 3s
-    file:
-      path: ${GOST_HOSTS_FILE}
-
-bypasses:
-  - name: proxy-bypass
-    reload: 3s
-    file:
-      path: ${GOST_BYPASS_FILE}
-GOST_YAML_EOF
-
-  log "GOST config generated at ${GOST_CONFIG}"
-
-  # --- Parse PROXY_MAP (domain grouping: same domain -> one nginx server block) ---
-  #
-  # Format: source>target[,source>target,...]
-  #   source: [protocol://]host[:port][/path]  (supports wildcard * in host)
-  #   target: [host:]port[/path]  (host defaults to 127.0.0.1)
-  #
-  # Same-domain entries are grouped into one nginx server block with multiple locations.
-  #
-  PROXY_MAP_VAL="$(echo -n "${PROXY_MAP:-}" | xargs)"
-  if [ -n "${PROXY_MAP_VAL}" ]; then
-    # We need associative arrays for domain grouping
-    declare -A DOMAIN_LOCATIONS      # domain -> nginx location blocks (accumulated)
-    declare -A DOMAIN_SEEN           # domain -> 1 (tracks unique domains)
-    MAPPINGS_JSON="["
-    FIRST=true
-
-    IFS=',' read -ra MAP_ENTRIES <<< "$PROXY_MAP_VAL"
-    for entry in "${MAP_ENTRIES[@]}"; do
-      entry=$(echo "$entry" | xargs)
-      [ -z "$entry" ] && continue
-      source_part="${entry%%>*}"
-      target_part="${entry##*>}"
-
-      if [ -z "$source_part" ] || [ -z "$target_part" ]; then
-        log "WARNING: Invalid PROXY_MAP entry '${entry}', skipping"
-        continue
-      fi
-
-      # Extract host from source (strip protocol and path)
-      source_host="${source_part}"
-      source_host="${source_host#*://}"    # strip protocol
-      source_host="${source_host%%/*}"     # strip path
-      # Warn about source port (ignored at GOST level)
-      if echo "$source_host" | grep -qE ':[0-9]+$' && ! echo "$source_host" | grep -q '^\*'; then
-        source_port_part="${source_host##*:}"
-        log "WARNING: Source port :${source_port_part} in '${source_part}' is ignored — all ports for this domain will be mapped"
-      fi
-      source_host="${source_host%%:*}"     # strip port (GOST hosts can't distinguish by port)
-
-      # Extract path from source (if any)
-      source_path="/"
-      source_raw_no_proto="${source_part#*://}"
-      if echo "$source_raw_no_proto" | grep -q '/'; then
-        source_path="/${source_raw_no_proto#*/}"
-        # Normalize: strip trailing * (it's just a visual hint, nginx does prefix match)
-        source_path="${source_path%\*}"
-        # Ensure trailing slash for prefix matching (except for root /)
-        if [ "$source_path" != "/" ] && [ "${source_path: -1}" != "/" ]; then
-          source_path="${source_path}/"
-        fi
-      fi
-
-      # Expand target shorthand: ":3000" -> "127.0.0.1:3000"
-      if [ "${target_part:0:1}" = ":" ]; then
-        target_part="127.0.0.1${target_part}"
-      fi
-      target_host_port="${target_part%%/*}"
-      target_path=""
-      if echo "$target_part" | grep -q '/'; then
-        target_path="/${target_part#*/}"
-        target_path="${target_path%\*}"
-      fi
-
-      # Domain grouping: track unique domains
-      if [ -z "${DOMAIN_SEEN[$source_host]+_}" ]; then
-        DOMAIN_SEEN[$source_host]=1
-        DOMAIN_LOCATIONS[$source_host]=""
-      fi
-
-      # Accumulate nginx location block for this domain
-      DOMAIN_LOCATIONS[$source_host]+="
-        location ${source_path} {
-            proxy_pass http://${target_host_port}${target_path};
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header Upgrade \$http_upgrade;
-            proxy_set_header Connection \$connection_upgrade;
-            proxy_http_version 1.1;
-            proxy_read_timeout 600s;
-            proxy_send_timeout 600s;
-        }"
-
-      # JSON state
-      if [ "$FIRST" = true ]; then FIRST=false; else MAPPINGS_JSON+=","; fi
-      MAPPINGS_JSON+="{\"source\":\"${source_part}\",\"target\":\"${target_part}\",\"source_host\":\"${source_host}\",\"source_path\":\"${source_path}\",\"internal_port\":${NGINX_PROXY_MAP_PORT}}"
-
-      log "Proxy map: ${source_part} -> ${target_part} (domain group ${source_host} via nginx :${NGINX_PROXY_MAP_PORT})"
-    done
-
-    MAPPINGS_JSON+="]"
-    echo "${MAPPINGS_JSON}" > "${PROXY_MAP_JSON}"
-
-    # Generate per-domain nginx server blocks and GOST hosts entries
-    for domain in "${!DOMAIN_SEEN[@]}"; do
-      # GOST hosts: domain -> 127.0.0.1 (GOST uses ".domain" for wildcards, not "*.domain")
-      gost_host="${domain}"
-      if [ "${gost_host:0:2}" = "*." ]; then
-        gost_host="${gost_host:1}"  # *.example.com -> .example.com
-      fi
-      echo "127.0.0.1 ${gost_host}" >> "${GOST_HOSTS_FILE}"
-
-      # Domain-level bypass entries (for documentation/service-level matching)
-      echo "${domain}" >> "${GOST_BYPASS_FILE}"
-
-      # nginx server block with server_name for Host-based routing
-      cat >> "${NGINX_PROXY_MAP_CONF}" <<NGINX_BLOCK_EOF
-server {
-    listen 127.0.0.1:${NGINX_PROXY_MAP_PORT};
-    listen 127.0.0.1:443 ssl;
-    ssl_certificate ${PROXY_MAP_TLS_CRT};
-    ssl_certificate_key ${PROXY_MAP_TLS_KEY};
-    server_name ${domain};
-    client_max_body_size 0;
-${DOMAIN_LOCATIONS[$domain]}
-}
-
-NGINX_BLOCK_EOF
-    done
-
-    # Add 127.0.0.1 to bypass — GOST hop-level bypass checks the resolved IP,
-    # and all mapped domains resolve to 127.0.0.1 via hosts.
-    echo "127.0.0.1" >> "${GOST_BYPASS_FILE}"
-  fi
-
-  # --- Parse PROXY_EXCLUDE ---
-  PROXY_EXCLUDE_VAL="$(echo -n "${PROXY_EXCLUDE:-}" | xargs)"
-  if [ -n "${PROXY_EXCLUDE_VAL}" ]; then
-    # Write to user bypasses JSON
-    BYPASS_JSON="["
-    FIRST_BYPASS=true
-    IFS=',' read -ra EXCLUDES <<< "$PROXY_EXCLUDE_VAL"
-    for pattern in "${EXCLUDES[@]}"; do
-      pattern=$(echo "$pattern" | xargs)
-      echo "${pattern}" >> "${GOST_BYPASS_FILE}"
-      if [ "$FIRST_BYPASS" = true ]; then FIRST_BYPASS=false; else BYPASS_JSON+=","; fi
-      BYPASS_JSON+="\"${pattern}\""
-    done
-    BYPASS_JSON+="]"
-    echo "${BYPASS_JSON}" > "${USER_BYPASS_JSON}"
-    log "GOST bypass (exclude): ${PROXY_EXCLUDE_VAL}"
-  fi
-
-  # --- Parse PROXY_INCLUDE (whitelist mode, overrides EXCLUDE) ---
-  PROXY_INCLUDE_VAL="$(echo -n "${PROXY_INCLUDE:-}" | xargs)"
-  if [ -n "${PROXY_INCLUDE_VAL}" ]; then
-    # Clear excludes — INCLUDE takes priority
-    # Keep PROXY_MAP bypass entries (they must always bypass chain)
-    PROXY_MAP_BYPASSES=""
-    if [ -n "${PROXY_MAP_VAL}" ]; then
-      for domain in "${!DOMAIN_SEEN[@]}"; do
-        PROXY_MAP_BYPASSES+="${domain}"$'\n'
-      done
-      PROXY_MAP_BYPASSES+="127.0.0.1"$'\n'
-    fi
-    echo -n "${PROXY_MAP_BYPASSES}" > "${GOST_BYPASS_FILE}"
-
-    # Write to user bypasses JSON and bypass file
-    BYPASS_JSON="["
-    FIRST_BYPASS=true
-    IFS=',' read -ra INCLUDES <<< "$PROXY_INCLUDE_VAL"
-    for pattern in "${INCLUDES[@]}"; do
-      pattern=$(echo "$pattern" | xargs)
-      echo "${pattern}" >> "${GOST_BYPASS_FILE}"
-      if [ "$FIRST_BYPASS" = true ]; then FIRST_BYPASS=false; else BYPASS_JSON+=","; fi
-      BYPASS_JSON+="\"${pattern}\""
-    done
-    BYPASS_JSON+="]"
-    echo "${BYPASS_JSON}" > "${USER_BYPASS_JSON}"
-    # Set bypass to whitelist mode in gost config
-    sed -i 's/name: proxy-bypass/name: proxy-bypass\n    whitelist: true/' "${GOST_CONFIG}"
-    log "GOST bypass (include/whitelist): ${PROXY_INCLUDE_VAL}"
-  fi
-
-  # --- PAC file generation (unchanged logic, controls browser-side bypass) ---
-  TRIMMED_BYPASS="$(echo -n "${PROXY_BYPASS_LIST:-}" | xargs)"
-  if [ -n "${TRIMMED_BYPASS}" ]; then
-    PAC_FILE="/opt/gem/proxy.pac"
-    {
-      echo 'function FindProxyForURL(url, host) {'
-      IFS=',' read -ra BYPASS_DOMAINS <<< "$TRIMMED_BYPASS"
-      for domain in "${BYPASS_DOMAINS[@]}"; do
-        domain=$(echo "$domain" | xargs)
-        clean_domain="${domain#\*.}"
-        echo "  if (dnsDomainIs(host, \"${clean_domain}\") || host === \"${clean_domain}\") return \"DIRECT\";"
-      done
-      echo "  return \"PROXY 127.0.0.1:${PROXY_PORT}\";"
-      echo '}'
-    } > "$PAC_FILE"
-    export BROWSER_EXTRA_ARGS="${BROWSER_EXTRA_ARGS} --proxy-pac-url=file://${PAC_FILE}"
-    log "Generated PAC file at ${PAC_FILE} with bypass: ${TRIMMED_BYPASS}"
-  else
-    export BROWSER_EXTRA_ARGS="${BROWSER_EXTRA_ARGS} --proxy-server=http://127.0.0.1:${PROXY_PORT}"
-  fi
-
-  # Trust the proxy-map self-signed cert via SPKI hash
-  export BROWSER_EXTRA_ARGS="${BROWSER_EXTRA_ARGS} --ignore-certificate-errors-spki-list=${PROXY_MAP_SPKI}"
-
-  # Ensure proxy config files are writable by the sandbox user (for runtime API)
-  chown $USER:$USER "${GOST_HOSTS_FILE}" "${GOST_BYPASS_FILE}" "${PROXY_MAP_JSON}" "${NGINX_PROXY_MAP_CONF}" "${USER_BYPASS_JSON}" 2>/dev/null || true
-  chmod 644 "${PROXY_MAP_TLS_CRT}" 2>/dev/null || true
-  chmod 600 "${PROXY_MAP_TLS_KEY}" 2>/dev/null || true
-else
-  rm -f /opt/gem/supervisord/supervisord.gost.conf
-  # Ensure nginx-proxy-map.conf exists even without PROXY_SERVER,
-  # since nginx.conf unconditionally includes it.
-  touch /opt/gem/nginx-proxy-map.conf
-fi
+touch /opt/gem/nginx-proxy-map.conf
 timing_checkpoint "gost_config"
 
 # ----------------------

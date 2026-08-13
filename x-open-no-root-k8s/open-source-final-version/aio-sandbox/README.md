@@ -5,7 +5,7 @@
 ## 1. 非 root 运行（全部进程为 x 用户）
 
 - supervisord 自身：`supervisord.conf` 顶层 `user=x`，pid/log/socket 在 `/home/x/.run/`
-- 所有子程序（browser/vnc/nginx/openbox/dbus/fcitx5/websocat/gost/mcp/nodejs_repl/daytona/pm2）均 `user=x`
+- 所有子程序（browser/vnc/nginx/openbox/dbus/fcitx5/websocat/mcp/nodejs_repl/daytona/pm2）均 `user=x`
 - guard 运行时模板统一用 `%(ENV_USER)s`（=x）
 
 ## 2. 服务开关（run.sh 默认值）
@@ -22,13 +22,12 @@
 
 `browser.conf` 的 `autostart` 改为 `%(ENV_AUTOSTART_BROWSER)s` 环境变量化。
 
-## 2a. sudo 提权限制（需密码）
+## 2a. x 完全无 sudo（完全非特权）
 
-- x 用户**可以 sudo 但必须输入密码**，移除了默认的 `NOPASSWD:ALL`
-- sudoers 规则：`x ALL=(ALL) ALL`（默认需密码验证）
-- 密码：默认 `x123456`，可用 `docker run -e X_USER_PASSWORD=xxx` 覆盖
-- 效果：浏览器页面/粘贴的命令以 x 身份执行时，无法静默 `sudo -i` 提权（`sudo -n` 直接失败）；所有 sudo 使用记录在 /var/log/auth.log
-- 注意：x 用户验证密码成功后有标准 sudo 15 分钟凭据缓存，属正常行为
+- x 不在 sudo 组、无任何 sudoers 规则，容器内无法提权（docker root 模式与 k8s runAsUser:1000 行为一致）
+- 系统级安装（apt）不可用；语言/依赖包走用户级安装（pip --user、npm 本地 node_modules、解压到 ~/go、~/jdk 等）
+- 浏览器页面/粘贴的命令以 x 身份执行时，`sudo` 直接拒绝，无法静默提权
+- bwrap 的 userns 内核参数由平台授予（k8s securityContext.sysctls / privileged），build 时仅在可写时尝试，运行时不使用 sudo
 
 ## 3. dashboard 面板控制（index.html）
 

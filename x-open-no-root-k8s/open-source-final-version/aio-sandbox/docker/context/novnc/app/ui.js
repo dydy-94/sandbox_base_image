@@ -1186,6 +1186,12 @@ const UI = {
 
         // Do this last because it can only be used on rendered elements
         UI.rfb.focus();
+
+        // Clipboard monitor: register browser→VNC paste listeners while connected
+        // (removed in disconnectFinished). Needs a user gesture (click/focus),
+        // and navigator.clipboard requires HTTPS.
+        document.getElementById('noVNC_container').addEventListener('click', UI.clipboardPaste);
+        window.addEventListener('focus', UI.clipboardPaste);
     },
 
     disconnectFinished(e) {
