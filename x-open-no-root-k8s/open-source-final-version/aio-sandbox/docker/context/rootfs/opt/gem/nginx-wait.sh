@@ -20,6 +20,26 @@ join_wait_items() {
   done
 }
 
+# Services started immediately before nginx can become ready between two normal
+# WAIT_INTERVAL polls. Check those local ports at a short interval so nginx does
+# not race them or add up to two seconds of avoidable startup latency.
+if [ -n "${WAIT_FAST_PORTS:-}" ]; then
+  IFS=',' read -ra FAST_PORTS_ARRAY <<<"$WAIT_FAST_PORTS"
+  for port in "${FAST_PORTS_ARRAY[@]}"; do
+    port=$(trim_wait_item "$port")
+    [ -z "$port" ] && continue
+    attempts=0
+    until nc -z 127.0.0.1 "$port" >/dev/null 2>&1; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 200 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Timeout waiting for required port: $port"
+        exit 1
+      fi
+      sleep 0.05
+    done
+  done
+fi
+
 # Declare the arrays that will hold the final readiness targets to check.
 PORTS_ARRAY=()
 FILES_ARRAY=()
