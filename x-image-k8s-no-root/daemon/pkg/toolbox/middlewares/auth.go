@@ -121,6 +121,21 @@ func JWTAuthMiddleware(cfg *daemonconfig.Config) (gin.HandlerFunc, error) {
 		authCtx.Result = AuthResultPassed
 		authCtx.Reason = "jwt verification passed"
 
+		// 沙箱用户身份比对（对齐 sandbox port_auth 的 authorize 规则）：
+		//   1. 上下文缺失或 X_SANDBOX_TYPE != "USER" → 放行
+		//   2. sub 以 @native 结尾 → 放行
+		//   3. 取 sap_id（兜底 rtc_id）：没有 → 放行；有则与沙箱
+		//      X_SANDBOX_USER_ID 比对，不匹配 → 403
+		if allow, skipReason := checkSandboxUser(claims); !allow {
+			authCtx.Result = AuthResultSandboxUserMismatch
+			authCtx.Reason = "sandbox user mismatch: token user != sandbox user"
+			abortWithAuthError(c, 403, authCtx)
+			return
+		} else if skipReason != "" {
+			authCtx.Result = AuthResultPassed
+			authCtx.Reason = skipReason
+		}
+
 		// 远程二次鉴权（JWT 本地校验通过后调用，SANDBOX_AUTH_CHECK=true 时启用）
 		if cfg.Auth.SandboxAuthCheck {
 			remoteOK, remoteReason := performRemoteSandboxCheck(c.Request.Context(), cfg.Auth, tokenString)
@@ -170,6 +185,7 @@ func renderBodyTemplate(tpl string) string {
 // header:
 //   - Content-Type: application/json
 //   - id-token: 透传进来的 token
+//
 // body: 由 SANDBOX_AUTH_CHECK_BODY 模板渲染后得到，${VAR_NAME} 占位符从环境变量替换
 //
 // 判定规则：HTTP 2xx 且响应 JSON 的 data == true 才算通过
@@ -232,6 +248,38 @@ func performRemoteSandboxCheck(ctx context.Context, cfg daemonconfig.AuthConfig,
 	}
 
 	return true, ""
+}
+
+// checkSandboxUser 沙箱用户身份比对，对齐 sandbox port_auth 的 authorize 规则：
+//
+//	allow=true,  reason=""       → 放行（token 用户与沙箱用户匹配，或无需比对）
+//	allow=true,  reason!=""      → 放行并记录原因（context 缺失 / 非 USER / @native / 无用户 claim）
+//	allow=false, reason!=""      → 拒绝（应返回 403）
+func checkSandboxUser(claims jwt.MapClaims) (allow bool, reason string) {
+	ctx, ok := LoadSandboxContext()
+	if !ok {
+		return true, "sandbox context unavailable, port authorization bypassed"
+	}
+	if ctx.SandboxType != sandboxUserType {
+		return true, "non-user sandbox, port authorization bypassed"
+	}
+
+	sub, _ := claims["sub"].(string)
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(sub)), "@native") {
+		return true, "native token user, port authorization bypassed"
+	}
+
+	tokenUserID := claimText(claims["sap_id"])
+	if tokenUserID == "" {
+		tokenUserID = claimText(claims["rtc_id"])
+	}
+	if tokenUserID == "" {
+		return true, "no sap_id/rtc_id claim, port authorization bypassed"
+	}
+	if strings.EqualFold(strings.TrimSpace(tokenUserID), strings.TrimSpace(ctx.UserID)) {
+		return true, ""
+	}
+	return false, "sandbox user mismatch"
 }
 
 // mapRemoteCheckResult 把远程鉴权失败的 reason 映射到 AuthResult 枚举

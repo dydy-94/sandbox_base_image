@@ -343,6 +343,16 @@ RUN ln -sfn /opt/python3.13/bin/python3.13 /usr/bin/python3 && \
         --index-url ${PIP_INDEX_URL} \
     || pip3 install --no-cache-dir "PyYAML>=6.0" "nacos-sdk-python>=1.1.0,<3" \
     || echo "WARN: PyYAML/nacos-sdk-python install failed; continuing"; \
+    # playwright: Python 侧（python3 -c "import playwright" 驱动浏览器用）。
+    # npm 全局已有 playwright@1.56.0（§15），这里补 pip 版供 python 生态使用。
+    # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1：Chromium 已由 §9 chrome-deb/browser-ctl
+    # 预置进镜像，跳过 playwright 自带的浏览器下载。
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir --retries 3 --timeout 60 "playwright>=1.42.0" \
+        --index-url ${PIP_INDEX_URL} \
+    || PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir "playwright>=1.42.0" \
+    || echo "WARN: playwright pip install failed; continuing"; \
+    python3 -c "import playwright; print('playwright pip OK', playwright.__version__)" 2>/dev/null \
+    || echo "WARN: playwright pip import check failed"; \
     python3 -c "import yaml, nacos; print('PyYAML', yaml.__version__, '| nacos-sdk-python', nacos.__version__)" 2>/dev/null \
     || echo "WARN: PyYAML/nacos import check failed"; \
     python3 --version && pip3 --version && \

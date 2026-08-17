@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +20,27 @@ import (
 )
 
 var ignoreLoggingPaths = map[string]bool{}
+
+// loadBashrcVars 从 ~/.bashrc 实时读取日志标记所需的沙箱变量
+// （不做缓存：daemon 预启动后运行期下发的变量必须能被读到）
+func loadBashrcVars() map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = "/home/x"
+	}
+	values := map[string]string{}
+	fillBashrc(values, filepath.Join(home, ".bashrc"))
+	return values
+}
+
+// requestLogTag 构造日志标记前缀（全部取自已下发到 ~/.bashrc 的沙箱变量）：
+//
+//	【X_SANDBOX_USER_ID/X_SANDBOX_USER_NAME】【type:X_SANDBOX_TYPE】【X_SANDBOX_ID】
+func requestLogTag() string {
+	v := loadBashrcVars()
+	return "【" + v["X_SANDBOX_USER_ID"] + "/" + v["X_SANDBOX_USER_NAME"] +
+		"】【type:" + v["X_SANDBOX_TYPE"] + "】【" + v["X_SANDBOX_ID"] + "】"
+}
 
 // LoggingMiddleware 访问日志中间件
 //
@@ -101,22 +124,25 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 			fields["body"] = bodyStr
 		}
 
+		// 日志标记前缀：【X_SANDBOX_USER_ID/X_SANDBOX_USER_NAME】【type:X_SANDBOX_TYPE】【X_SANDBOX_ID】
+		tag := requestLogTag()
+
 		// 实际输出日志
 		if len(ctx.Errors) > 0 {
 			fields["error"] = ctx.Errors.String()
-			log.WithFields(fields).Error("API ERROR")
+			log.WithFields(fields).Error(tag + " API ERROR")
 			return
 		}
 
 		fullPath := ctx.FullPath()
 		if ignoreLoggingPaths[fullPath] {
-			log.WithFields(fields).Debug("API REQUEST")
+			log.WithFields(fields).Debug(tag + " API REQUEST")
 		} else {
 			// 鉴权失败的请求使用 Warn 级别，便于告警
 			if statusCode == cfg.GetAuthFailureStatus() {
-				log.WithFields(fields).Warn("API REQUEST")
+				log.WithFields(fields).Warn(tag + " API REQUEST")
 			} else {
-				log.WithFields(fields).Info("API REQUEST")
+				log.WithFields(fields).Info(tag + " API REQUEST")
 			}
 		}
 	}
@@ -135,7 +161,8 @@ func isSensitiveHeader(name string) bool {
 // base64Encode 对敏感头值进行 base64 编码（可解码），用于日志脱敏
 //
 // 日志中会显示为 "b64:xxxxxxxx"，运维人员需要时可以解码还原：
-//   echo "xxxxxxxx" | base64 -d
+//
+//	echo "xxxxxxxx" | base64 -d
 //
 // 这样既防止明文直接暴露，又保留了排查问题的能力。
 func base64Encode(value string) string {

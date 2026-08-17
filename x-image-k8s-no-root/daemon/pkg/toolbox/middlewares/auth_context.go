@@ -37,6 +37,8 @@ const (
 	AuthResultRemoteCheckFailed AuthResult = "remote_check_failed"
 	// AuthResultRemoteCheckError 远程鉴权调用异常（超时/网络错误）
 	AuthResultRemoteCheckError AuthResult = "remote_check_error"
+	// AuthResultSandboxUserMismatch 沙箱用户身份不匹配（token sap_id/rtc_id != 沙箱 X_SANDBOX_USER_ID）
+	AuthResultSandboxUserMismatch AuthResult = "sandbox_user_mismatch"
 )
 
 // AuthContext 鉴权上下文（用于日志记录）
