@@ -5,8 +5,9 @@ import os
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from .environment import SandboxContextLoader
+from .environment import SandboxContextError, SandboxContextLoader
 from .policy import authorize
+from .verifier import TrustedTokenVerifier
 
 
 LISTEN_HOST = "127.0.0.1"
@@ -35,6 +36,7 @@ class PortAuthServer(HTTPServer):
     def __init__(self, address: tuple[str, int]) -> None:
         super().__init__(address, PortAuthHandler)
         self.context_loader = SandboxContextLoader()
+        self.token_verifier = TrustedTokenVerifier.from_path()
         self.rejection_logger = RateLimitedLogger()
 
 
@@ -50,9 +52,16 @@ class PortAuthHandler(BaseHTTPRequestHandler):
             self._respond(404)
             return
 
+        try:
+            context = self.server.context_loader.get()  # type: ignore[attr-defined]
+        except SandboxContextError as exc:
+            self.server.rejection_logger.warning(exc.reason, 503)  # type: ignore[attr-defined]
+            self._respond(503)
+            return
         result = authorize(
-            self.server.context_loader.get(),  # type: ignore[attr-defined]
+            context,
             self.headers.get("Id-Token"),
+            self.server.token_verifier,  # type: ignore[attr-defined]
         )
         if result.status != 204:
             self.server.rejection_logger.warning(  # type: ignore[attr-defined]

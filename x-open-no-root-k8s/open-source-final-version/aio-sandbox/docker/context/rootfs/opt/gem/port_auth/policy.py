@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import base64
-import json
 import math
 import time
 from dataclasses import dataclass
 
 from .environment import SandboxContext
+from .verifier import TokenVerificationError, TrustedTokenVerifier
 
 
 MAX_TOKEN_BYTES = 32 * 1024
@@ -24,6 +23,7 @@ ALLOW = AuthorizationResult(204, "allow")
 def authorize(
     context: SandboxContext | None,
     token: str | None,
+    verifier: TrustedTokenVerifier,
     *,
     now: float | None = None,
 ) -> AuthorizationResult:
@@ -35,11 +35,9 @@ def authorize(
         return AuthorizationResult(401, "token_too_large")
 
     try:
-        header, payload = _decode_jwt(token)
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        return AuthorizationResult(401, "malformed_token")
-    if not isinstance(header, dict) or not isinstance(payload, dict):
-        return AuthorizationResult(401, "malformed_token")
+        payload = verifier.decode(token)
+    except TokenVerificationError as exc:
+        return AuthorizationResult(401, exc.reason)
 
     expires_at = payload.get("exp")
     if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
@@ -57,23 +55,10 @@ def authorize(
     if not token_user_id:
         token_user_id = _claim_text(payload.get("rtc_id"))
     if not token_user_id:
-        return ALLOW
+        return AuthorizationResult(403, "missing_user_claim")
     if _normalize_id(token_user_id) == _normalize_id(context.user_id):
         return ALLOW
     return AuthorizationResult(403, "user_mismatch")
-
-
-def _decode_jwt(token: str) -> tuple[object, object]:
-    parts = token.strip().split(".")
-    if len(parts) != 3 or not all(parts):
-        raise ValueError("JWT must contain three non-empty segments")
-    return _decode_segment(parts[0]), _decode_segment(parts[1])
-
-
-def _decode_segment(segment: str) -> object:
-    padding = "=" * (-len(segment) % 4)
-    decoded = base64.b64decode(segment + padding, altchars=b"-_", validate=True)
-    return json.loads(decoded.decode("utf-8"))
 
 
 def _claim_text(value: object) -> str:
