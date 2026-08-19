@@ -224,6 +224,9 @@ func GetConfig() (*Config, error) {
 	}
 
 	// 访问日志默认值
+	// 默认记录请求体（重要入参）与响应结果（截断），便于问题排查；
+	// 需要关闭时在 yaml 或环境变量里显式设置 false。
+	config.AccessLog.LogBody = true
 	if config.AccessLog.BodyMaxSize <= 0 {
 		config.AccessLog.BodyMaxSize = 4096 // 默认最大 4KB
 	}

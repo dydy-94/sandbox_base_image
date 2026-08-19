@@ -21,6 +21,36 @@ import (
 
 var ignoreLoggingPaths = map[string]bool{}
 
+// responseLogMax 响应体日志最大字节数（防止大结果污染日志，超长截断）
+const responseLogMax = 4096
+
+// captureWriter 包装 gin.ResponseWriter，捕获响应体用于日志，超长自动截断
+// （只保留前 responseLogMax 字节，后续写入直接透传不再缓存，避免大结果全量缓冲）
+type captureWriter struct {
+	gin.ResponseWriter
+	body      []byte
+	truncated bool
+}
+
+func (w *captureWriter) Write(b []byte) (int, error) {
+	if len(w.body) < responseLogMax {
+		remain := responseLogMax - len(w.body)
+		if len(b) <= remain {
+			w.body = append(w.body, b...)
+		} else {
+			w.body = append(w.body, b[:remain]...)
+			w.truncated = true
+		}
+	} else {
+		w.truncated = true
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *captureWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
 // loadBashrcVars 从 ~/.bashrc 实时读取日志标记所需的沙箱变量
 // （不做缓存：daemon 预启动后运行期下发的变量必须能被读到）
 func loadBashrcVars() map[string]string {
@@ -33,13 +63,14 @@ func loadBashrcVars() map[string]string {
 	return values
 }
 
-// requestLogTag 构造日志标记前缀（全部取自已下发到 ~/.bashrc 的沙箱变量）：
+// RequestLogTag 构造日志标记前缀（全部取自已下发到 ~/.bashrc 的沙箱变量），
+// 供访问日志与各业务 handler 日志共用：
 //
-//	【X_SANDBOX_USER_ID/X_SANDBOX_USER_NAME】【type:X_SANDBOX_TYPE】【X_SANDBOX_ID】
-func requestLogTag() string {
+//	[X_SANDBOX_USER_ID][X_SANDBOX_USER_NAME][X_SANDBOX_TYPE][X_SANDBOX_ID]
+func RequestLogTag() string {
 	v := loadBashrcVars()
-	return "【" + v["X_SANDBOX_USER_ID"] + "/" + v["X_SANDBOX_USER_NAME"] +
-		"】【type:" + v["X_SANDBOX_TYPE"] + "】【" + v["X_SANDBOX_ID"] + "】"
+	return "[" + v["X_SANDBOX_USER_ID"] + "][" + v["X_SANDBOX_USER_NAME"] +
+		"][" + v["X_SANDBOX_TYPE"] + "][" + v["X_SANDBOX_ID"] + "]"
 }
 
 // LoggingMiddleware 访问日志中间件
@@ -56,7 +87,8 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 
 		// 读取并缓存请求体（让后续 handler 仍能正常读取）
 		var bodyBytes []byte
-		if cfg != nil && cfg.AccessLog.LogBody && ctx.Request.Body != nil {
+		if cfg != nil && cfg.AccessLog.LogBody && ctx.Request.Body != nil &&
+			shouldCaptureRequestBody(ctx.Request.Header.Get("Content-Type")) {
 			maxSize := int64(cfg.AccessLog.BodyMaxSize)
 			if maxSize <= 0 {
 				maxSize = 4096
@@ -65,6 +97,14 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 			bodyBytes, _ = io.ReadAll(limitedReader)
 			// 还原 body 供后续 handler 使用
 			ctx.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+
+		// 包裹 ResponseWriter 捕获响应体（用于结果日志，超长自动截断）。
+		// 文件内容类接口（/files/*）不捕获——响应就是文件内容，既不写日志也不缓存进内存
+		var capture *captureWriter
+		if !isFileContentPath(ctx.Request.URL.Path) {
+			capture = &captureWriter{ResponseWriter: ctx.Writer}
+			ctx.Writer = capture
 		}
 
 		ctx.Next()
@@ -88,6 +128,20 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 			"status":    statusCode,
 			"latency":   latencyTime,
 			"client_ip": clientIP,
+		}
+
+		// 记录 GET 类请求的 query 参数（重要入参）
+		if rawQuery := ctx.Request.URL.RawQuery; rawQuery != "" {
+			fields["query"] = rawQuery
+		}
+
+		// 记录响应结果（超长自动截断，并标记截断）。
+		// 文件内容类接口（/files/*）capture 为 nil，天然不记录
+		if capture != nil && len(capture.body) > 0 {
+			fields["response"] = string(capture.body)
+			if capture.truncated {
+				fields["response_truncated"] = true
+			}
 		}
 
 		// 记录鉴权相关上下文
@@ -124,8 +178,8 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 			fields["body"] = bodyStr
 		}
 
-		// 日志标记前缀：【X_SANDBOX_USER_ID/X_SANDBOX_USER_NAME】【type:X_SANDBOX_TYPE】【X_SANDBOX_ID】
-		tag := requestLogTag()
+		// 日志标记前缀：【sapId】【name】【type】【id】（从 ~/.bashrc 实时取）
+		tag := RequestLogTag()
 
 		// 实际输出日志
 		if len(ctx.Errors) > 0 {
@@ -156,6 +210,33 @@ func isSensitiveHeader(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isFileContentPath 判断接口是否可能返回文件内容。
+//
+// /files/* 下的读文件、下载等接口，响应体就是文件内容（文本或二进制），
+// 打印到日志会泄漏文件数据，统一跳过 response 字段。请求体侧已由
+// shouldCaptureRequestBody 排除 multipart / octet-stream。
+func isFileContentPath(path string) bool {
+	return strings.HasPrefix(path, "/files")
+}
+
+// shouldCaptureRequestBody 判断请求体能否安全捕获用于日志。
+//
+// multipart/form-data（文件上传）与原始二进制流如果被 LimitReader 截断后
+// 再还原回 ctx.Request.Body，handler 解析 multipart 必然失败（body 不完整），
+// 所以这类请求体跳过捕获、不做任何改动；仅捕获可安全读取的 JSON/文本类。
+func shouldCaptureRequestBody(contentType string) bool {
+	switch {
+	case strings.Contains(contentType, "multipart/"):
+		return false
+	case strings.Contains(contentType, "application/octet-stream"):
+		return false
+	case strings.Contains(contentType, "application/x-www-form-urlencoded"):
+		return false
+	default:
+		return true
+	}
 }
 
 // base64Encode 对敏感头值进行 base64 编码（可解码），用于日志脱敏

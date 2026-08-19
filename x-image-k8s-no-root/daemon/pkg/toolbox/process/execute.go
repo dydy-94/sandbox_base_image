@@ -13,6 +13,8 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/daytonaio/daemon/pkg/toolbox/middlewares"
 )
 
 // ExecuteCommand godoc
@@ -53,19 +55,19 @@ func ExecuteCommand(c *gin.Context) {
 		switch {
 		case badReqMsg != "":
 			// 400 参数错误：Warn
-			log.WithFields(fields).Warn("execute command rejected")
+			log.WithFields(fields).Warn(middlewares.RequestLogTag() + " execute command rejected")
 		case timedOut:
 			// 超时 408：Error 级别，便于告警
-			log.WithFields(fields).Error("execute command timeout")
+			log.WithFields(fields).Error(middlewares.RequestLogTag() + " execute command timeout")
 		case !ok:
 			// 其他返回路径（Aborted、handler panic 等）：Error
-			log.WithFields(fields).Error("execute command failed")
+			log.WithFields(fields).Error(middlewares.RequestLogTag() + " execute command failed")
 		case exitCode != 0:
 			// 业务退出码非 0：Warn，便于运维扫一眼
-			log.WithFields(fields).Warn("execute command exited non-zero")
+			log.WithFields(fields).Warn(middlewares.RequestLogTag() + " execute command exited non-zero")
 		default:
 			// 完全成功：Info
-			log.WithFields(fields).Info("execute command ok")
+			log.WithFields(fields).Info(middlewares.RequestLogTag() + " execute command ok")
 		}
 	}()
 
@@ -84,7 +86,8 @@ func ExecuteCommand(c *gin.Context) {
 	}
 
 	// 进入执行前打一条 Info，便于排查"调用了但未返回"的请求
-	log.Infof("execute command start: %q timeout=%s", request.Command, formatTimeout(request.Timeout))
+	log.Infof("%s execute command start: %q timeout=%s",
+		middlewares.RequestLogTag(), request.Command, formatTimeout(request.Timeout))
 
 	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	if request.Cwd != nil {
