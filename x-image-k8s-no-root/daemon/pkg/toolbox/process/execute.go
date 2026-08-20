@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/daytonaio/daemon/internal/util"
 	"github.com/daytonaio/daemon/pkg/toolbox/middlewares"
 )
 
@@ -85,9 +86,11 @@ func ExecuteCommand(c *gin.Context) {
 		return
 	}
 
-	// 进入执行前打一条 Info，便于排查"调用了但未返回"的请求
+	// 进入执行前打一条 Info，便于排查"调用了但未返回"的请求。
+	// request.Command 可能携带 ANSI 彩色码（例如安装脚本里的高亮 URL），
+	// 打日志前统一剥离，避免日志出现 [36m/[0m 乱码。
 	log.Infof("%s execute command start: %q timeout=%s",
-		middlewares.RequestLogTag(), request.Command, formatTimeout(request.Timeout))
+		middlewares.RequestLogTag(), util.SanitizeLogString(request.Command), formatTimeout(request.Timeout))
 
 	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	if request.Cwd != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	daemonconfig "github.com/daytonaio/daemon/cmd/daemon/config"
+	"github.com/daytonaio/daemon/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -132,13 +133,13 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 
 		// 记录 GET 类请求的 query 参数（重要入参）
 		if rawQuery := ctx.Request.URL.RawQuery; rawQuery != "" {
-			fields["query"] = rawQuery
+			fields["query"] = util.SanitizeLogString(rawQuery)
 		}
 
 		// 记录响应结果（超长自动截断，并标记截断）。
 		// 文件内容类接口（/files/*）capture 为 nil，天然不记录
 		if capture != nil && len(capture.body) > 0 {
-			fields["response"] = string(capture.body)
+			fields["response"] = util.SanitizeLogString(string(capture.body))
 			if capture.truncated {
 				fields["response_truncated"] = true
 			}
@@ -175,7 +176,7 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 			if err := json.Indent(&prettyJSON, bodyBytes, "", "  "); err == nil {
 				bodyStr = prettyJSON.String()
 			}
-			fields["body"] = bodyStr
+			fields["body"] = util.SanitizeLogString(bodyStr)
 		}
 
 		// 日志标记前缀：【sapId】【name】【type】【id】（从 ~/.bashrc 实时取）

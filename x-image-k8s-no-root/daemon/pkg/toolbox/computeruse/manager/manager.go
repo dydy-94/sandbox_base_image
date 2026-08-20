@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/daytonaio/daemon/internal/util"
 	"github.com/daytonaio/daemon/pkg/toolbox/computeruse"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
@@ -76,8 +77,8 @@ func detectPluginError(path string) *ComputerUseError {
 
 	// Log the raw error for debugging
 	log.Debugf("Plugin execution failed - Exit code: %d, Error: %v", exitCode, err)
-	log.Debugf("Plugin stdout: %s", stdout.String())
-	log.Debugf("Plugin stderr: %s", stderr.String())
+	log.Debugf("Plugin stdout: %s", util.SanitizeLogString(stdout.String()))
+	log.Debugf("Plugin stderr: %s", util.SanitizeLogString(stderr.String()))
 
 	// Check for missing X11 runtime dependencies
 	if strings.Contains(output, "libX11.so.6") ||

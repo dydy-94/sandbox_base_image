@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/daytonaio/daemon/internal/util"
 	"github.com/daytonaio/daemon/pkg/common"
 	"github.com/daytonaio/daemon/pkg/ssh/config"
 	"github.com/gliderlabs/ssh"
@@ -234,7 +235,7 @@ func (s *Server) handleNonPty(session ssh.Session) {
 	err = cmd.Wait()
 
 	if err != nil {
-		log.Println(session.RawCommand(), " ", err)
+		log.Println(util.SanitizeLogString(session.RawCommand()), " ", err)
 		session.Exit(127)
 		return
 	}

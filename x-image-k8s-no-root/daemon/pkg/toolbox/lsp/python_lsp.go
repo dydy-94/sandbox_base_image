@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/daytonaio/daemon/internal/util"
 	"github.com/sourcegraph/jsonrpc2"
 
 	log "github.com/sirupsen/logrus"
@@ -35,7 +36,7 @@ func (s *PythonLSPServer) Initialize(pathToProject string) error {
 	handler := jsonrpc2.HandlerWithError(func(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (interface{}, error) {
 		log.Debugf("Received request: %s", req.Method)
 		if req.Params != nil {
-			log.Debugf("Params: %+v", req.Params)
+			log.Debugf("Params: %s", util.SanitizeLogString(fmt.Sprintf("%+v", req.Params)))
 		}
 		return nil, nil
 	})

@@ -269,7 +269,10 @@ func initLogs(logWriter io.Writer) {
 	log.SetLevel(logLevel)
 	logFormatter := &config.LogFormatter{
 		TextFormatter: &log.TextFormatter{
-			ForceColors: true,
+			// 禁用 ANSI 颜色：daemon 日志会被 k8s/docker 日志系统收集，
+			// ForceColors 会把 INFO/字段名染成 \x1b[36m，收集端不做 ANSI
+			// 解析就显示成 [36m 乱码。日志可读性靠格式本身，不需要颜色。
+			DisableColors: true,
 		},
 		LogFileWriter: logWriter,
 	}
