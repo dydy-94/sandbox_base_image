@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/daytonaio/daemon/internal/util"
+	"github.com/daytonaio/daemon/pkg/toolbox/middlewares"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
@@ -47,6 +48,23 @@ type ErrorResponse struct {
 //	@id				SessionExecuteCommand
 func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 	sessionId := c.Param("sessionId")
+	startTime := time.Now()
+	// ok/finalExitCode 由 defer 统一落日志，覆盖所有返回路径
+	ok := false
+	finalExitCode := -1
+	defer func() {
+		fields := log.Fields{
+			"session_id":  sessionId,
+			"duration_ms": time.Since(startTime).Milliseconds(),
+			"exit_code":   finalExitCode,
+			"ok":          ok,
+		}
+		if ok {
+			log.WithFields(fields).Info(middlewares.RequestLogTagCtx(c) + " session execute ok")
+		} else {
+			log.WithFields(fields).Warn(middlewares.RequestLogTagCtx(c) + " session execute failed")
+		}
+	}()
 
 	var request SessionExecuteRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -64,8 +82,11 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 		return
 	}
 
-	session, ok := sessions[sessionId]
-	if !ok {
+	log.Infof("%s session execute start: session_id=%s async=%v command=%q",
+		middlewares.RequestLogTagCtx(c), sessionId, request.RunAsync, util.SanitizeLogString(request.Command))
+
+	session, found := sessions[sessionId]
+	if !found {
 		c.AbortWithError(http.StatusNotFound, errors.New("session not found"))
 		return
 	}
@@ -137,6 +158,7 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 	}
 
 	if request.RunAsync {
+		ok = true
 		c.JSON(http.StatusAccepted, SessionExecuteResponse{
 			CommandId: cmdId,
 		})
@@ -168,6 +190,8 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 			}
 
 			sessions[sessionId].commands[*cmdId].ExitCode = &exitCodeInt
+			ok = true
+			finalExitCode = exitCodeInt
 
 			logBytes, err := os.ReadFile(logFilePath)
 			if err != nil {

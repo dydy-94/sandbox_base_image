@@ -56,19 +56,19 @@ func ExecuteCommand(c *gin.Context) {
 		switch {
 		case badReqMsg != "":
 			// 400 参数错误：Warn
-			log.WithFields(fields).Warn(middlewares.RequestLogTag() + " execute command rejected")
+			log.WithFields(fields).Warn(middlewares.RequestLogTagCtx(c) + " execute command rejected")
 		case timedOut:
 			// 超时 408：Error 级别，便于告警
-			log.WithFields(fields).Error(middlewares.RequestLogTag() + " execute command timeout")
+			log.WithFields(fields).Error(middlewares.RequestLogTagCtx(c) + " execute command timeout")
 		case !ok:
 			// 其他返回路径（Aborted、handler panic 等）：Error
-			log.WithFields(fields).Error(middlewares.RequestLogTag() + " execute command failed")
+			log.WithFields(fields).Error(middlewares.RequestLogTagCtx(c) + " execute command failed")
 		case exitCode != 0:
 			// 业务退出码非 0：Warn，便于运维扫一眼
-			log.WithFields(fields).Warn(middlewares.RequestLogTag() + " execute command exited non-zero")
+			log.WithFields(fields).Warn(middlewares.RequestLogTagCtx(c) + " execute command exited non-zero")
 		default:
 			// 完全成功：Info
-			log.WithFields(fields).Info(middlewares.RequestLogTag() + " execute command ok")
+			log.WithFields(fields).Info(middlewares.RequestLogTagCtx(c) + " execute command ok")
 		}
 	}()
 
@@ -90,7 +90,7 @@ func ExecuteCommand(c *gin.Context) {
 	// request.Command 可能携带 ANSI 彩色码（例如安装脚本里的高亮 URL），
 	// 打日志前统一剥离，避免日志出现 [36m/[0m 乱码。
 	log.Infof("%s execute command start: %q timeout=%s",
-		middlewares.RequestLogTag(), util.SanitizeLogString(request.Command), formatTimeout(request.Timeout))
+		middlewares.RequestLogTagCtx(c), util.SanitizeLogString(request.Command), formatTimeout(request.Timeout))
 
 	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	if request.Cwd != nil {

@@ -74,6 +74,33 @@ func RequestLogTag() string {
 		"][" + v["X_SANDBOX_TYPE"] + "][" + v["X_SANDBOX_ID"] + "]"
 }
 
+// requestTraceIDKey 是 x-b3-traceid 存入 gin.Context 的键
+const requestTraceIDKey = "trace_id"
+
+// SetTraceID 从请求头 x-b3-traceid 提取链路追踪 ID 并存入 gin.Context，
+// 供 RequestLogTagCtx 拼进日志前缀。请求头缺失时不做任何事。
+func SetTraceID(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	if tid := c.GetHeader("X-B3-TraceId"); tid != "" {
+		c.Set(requestTraceIDKey, tid)
+	}
+}
+
+// RequestLogTagCtx 与 RequestLogTag 相同，但在最前面带上当前请求的
+// x-b3-traceid（链路追踪 ID），形如 [traceid][uid][uname][type][id]。
+// 请求头没有 trace id 时保持原前缀不变，不影响旧日志格式。
+func RequestLogTagCtx(c *gin.Context) string {
+	if c == nil {
+		return RequestLogTag()
+	}
+	if traceID := c.GetString(requestTraceIDKey); traceID != "" {
+		return "[" + traceID + "]" + RequestLogTag()
+	}
+	return RequestLogTag()
+}
+
 // LoggingMiddleware 访问日志中间件
 //
 // 通过 cfg.AccessLog 配置控制日志详细度：
@@ -86,18 +113,30 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		startTime := time.Now()
 
-		// 读取并缓存请求体（让后续 handler 仍能正常读取）
+		// 提取链路追踪 ID（X-B3-TraceId）供日志前缀使用
+		SetTraceID(ctx)
+
+		// 读取并缓存请求体（让后续 handler 仍能正常读取）。
+		// 注意：必须读完整 body 再还原，日志侧才截断——早期实现只读前
+		// maxSize 字节就还原，长命令（>4KB）的 JSON 被切断导致后续
+		// ShouldBindJSON 失败、误报 "command is required"。
 		var bodyBytes []byte
+		var bodyTruncated bool
 		if cfg != nil && cfg.AccessLog.LogBody && ctx.Request.Body != nil &&
 			shouldCaptureRequestBody(ctx.Request.Header.Get("Content-Type")) {
 			maxSize := int64(cfg.AccessLog.BodyMaxSize)
 			if maxSize <= 0 {
 				maxSize = 4096
 			}
-			limitedReader := io.LimitReader(ctx.Request.Body, maxSize)
-			bodyBytes, _ = io.ReadAll(limitedReader)
-			// 还原 body 供后续 handler 使用
-			ctx.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			fullBody, _ := io.ReadAll(ctx.Request.Body)
+			// 还原完整 body 供后续 handler 使用（不得截断）
+			ctx.Request.Body = io.NopCloser(bytes.NewBuffer(fullBody))
+			// 日志侧只保留前 maxSize 字节，超长部分丢弃并标记
+			bodyBytes = fullBody
+			if int64(len(fullBody)) > maxSize {
+				bodyBytes = fullBody[:maxSize]
+				bodyTruncated = true
+			}
 		}
 
 		// 包裹 ResponseWriter 捕获响应体（用于结果日志，超长自动截断）。
@@ -177,10 +216,14 @@ func LoggingMiddleware(cfg *daemonconfig.Config) gin.HandlerFunc {
 				bodyStr = prettyJSON.String()
 			}
 			fields["body"] = util.SanitizeLogString(bodyStr)
+			if bodyTruncated {
+				fields["body_truncated"] = true
+			}
 		}
 
-		// 日志标记前缀：【sapId】【name】【type】【id】（从 ~/.bashrc 实时取）
-		tag := RequestLogTag()
+		// 日志标记前缀：【traceId】【sapId】【name】【type】【id】
+		// （traceId 取自请求头 X-B3-TraceId，其余从 ~/.bashrc 实时取）
+		tag := RequestLogTagCtx(ctx)
 
 		// 实际输出日志
 		if len(ctx.Errors) > 0 {

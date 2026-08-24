@@ -7,7 +7,10 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/daytonaio/daemon/internal/util"
+	"github.com/daytonaio/daemon/pkg/toolbox/middlewares"
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
 )
 
 // UploadFile godoc
@@ -39,6 +42,14 @@ func UploadFile(c *gin.Context) {
 		c.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
+
+	// multipart 请求体不会进访问日志的 body 字段（会破坏 handler 解析），
+	// 所以文件名/大小在 handler 层补充记录，与访问日志字段风格保持一致。
+	log.WithFields(log.Fields{
+		"path":     util.SanitizeLogString(path),
+		"filename": util.SanitizeLogString(file.Filename),
+		"size":     file.Size,
+	}).Info(middlewares.RequestLogTagCtx(c) + " files/upload ok")
 
 	c.Status(http.StatusOK)
 }
