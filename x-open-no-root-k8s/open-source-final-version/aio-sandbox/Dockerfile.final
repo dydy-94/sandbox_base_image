@@ -341,9 +341,9 @@ RUN ln -sfn /opt/python3.13/bin/python3.13 /usr/bin/python3 && \
     ln -sfn /opt/python3.13/bin/pip3.13 /usr/bin/pip3 && \
     ln -sfn /opt/python3.13/bin/pip3.13 /usr/bin/pip && \
     ln -sfn /opt/python3.13/bin/python3.13 /opt/python3/bin/python3 && \
-    pip3 install --no-cache-dir --retries 3 --timeout 60 supervisor \
+    pip3 install --no-cache-dir --retries 3 --timeout 60 "supervisor==4.3.0" \
         --index-url ${PIP_INDEX_URL} \
-    || pip3 install --no-cache-dir supervisor \
+    || pip3 install --no-cache-dir "supervisor==4.3.0" \
     || echo "WARN: supervisor 3.13 reinstall failed; supervisord may not start"; \
     pip3 install --no-cache-dir --retries 3 --timeout 60 fastmcp \
         --index-url ${PIP_INDEX_URL} \
@@ -385,6 +385,14 @@ RUN ln -sfn /opt/python3.13/bin/python3.13 /usr/bin/python3 && \
     || echo "WARN: PyYAML/nacos import check failed"; \
     python3 --version && pip3 --version && \
     /usr/bin/supervisord --version
+
+# Supervisor 4.3.0 waits for one idle poll before its first autostart
+# transition. Patch only that first poll while keeping the normal timeout for
+# every later loop. Exact version/source checks intentionally fail the build
+# instead of silently publishing an unoptimized image after dependency drift.
+COPY docker/context/scripts/patch-supervisor-first-poll.py /tmp/patch-supervisor-first-poll.py
+RUN python3 /tmp/patch-supervisor-first-poll.py && \
+    rm -f /tmp/patch-supervisor-first-poll.py
 
 # ===== 7. fnm + node (multi-version) =====
 # NOTE: we deliberately do NOT apt-get install chromium-browser here. The
