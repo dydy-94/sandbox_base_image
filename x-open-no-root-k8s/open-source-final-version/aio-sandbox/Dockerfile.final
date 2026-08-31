@@ -228,6 +228,16 @@ RUN apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/cn-mirror.sou
     fi
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 
+# ===== 3b. extra document / PDF tools (libreoffice, pandoc, poppler, pdftk, qpdf) =====
+# LibreOffice Writer/Calc/Impress for office→pdf conversion (docx/xlsx/pptx);
+# pandoc for markdown/docx conversion; poppler-utils (pdftotext/pdfinfo) +
+# pdftk + qpdf for PDF merge/split/metadata. Not in the offline apt cache, so
+# install from the CN mirror; the §3 apt-get update refreshed the lists.
+RUN bash -c 'set +e; ok=0; for try in 1 2 3 4 5; do echo "=== apt-get install extra tools attempt $try ==="; if apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress pandoc poppler-utils pdftk qpdf 2>&1 | tail -8; then ok=1; break; fi; sleep 5; done; [ $ok = 0 ] && echo WARN_extra_tools_install_failed; \
+    command -v soffice >/dev/null 2>&1 && command -v pandoc >/dev/null 2>&1 && \
+    command -v pdftotext >/dev/null 2>&1 && command -v pdftk >/dev/null 2>&1 && \
+    command -v qpdf >/dev/null 2>&1 && echo EXTRA_TOOLS_OK'
+
 # ===== 3a. timezone (China Standard Time) =====
 # TZ env flows into supervisord → chrome (--time-zone-for-testing=${TZ} in run.sh).
 # tzdata ships in the §2 apt list; ln /etc/localtime for system-wide tools.
@@ -243,6 +253,10 @@ ENV USER_GID=1000
 ENV HOME=/home/x
 ENV NPM_CONFIG_PREFIX=/home/x/.npm-global
 ENV NPM_CONFIG_CACHE=/home/x/.npm
+# NODE_PATH：让 agent 生成的 node 脚本可直接 require 全局 npm 包
+# (docx/axios/sharp/pptxgenjs/react 等, §15)。Node 默认不解析全局模块,
+# 不设置则 require('docx') 等会抛 MODULE_NOT_FOUND。
+ENV NODE_PATH=/home/x/.npm-global/lib/node_modules
 ENV PUBLIC_PORT=8080 \
     VNC_SERVER_PORT=5900 \
     WEBSOCKET_PROXY_PORT=5700 \
@@ -345,14 +359,28 @@ RUN ln -sfn /opt/python3.13/bin/python3.13 /usr/bin/python3 && \
     || echo "WARN: PyYAML/nacos-sdk-python install failed; continuing"; \
     # playwright: Python 侧（python3 -c "import playwright" 驱动浏览器用）。
     # npm 全局已有 playwright@1.56.0（§15），这里补 pip 版供 python 生态使用。
+    # 版本必须与 npm 全局对齐：agent 生成代码按 1.56.0 API 写，漂移会破坏浏览器控制。
     # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1：Chromium 已由 §9 chrome-deb/browser-ctl
     # 预置进镜像，跳过 playwright 自带的浏览器下载。
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir --retries 3 --timeout 60 "playwright>=1.42.0" \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir --retries 3 --timeout 60 "playwright==1.56.0" \
         --index-url ${PIP_INDEX_URL} \
-    || PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir "playwright>=1.42.0" \
+    || PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir "playwright==1.56.0" \
     || echo "WARN: playwright pip install failed; continuing"; \
     python3 -c "import playwright; print('playwright pip OK', playwright.__version__)" 2>/dev/null \
     || echo "WARN: playwright pip import check failed"; \
+    # office/doc python packages: lxml (xml/html 解析), requests (HTTP 客户端),
+    # python-pptx (pptx 生成), pypdf/reportlab (PDF 读写/生成), pandas/openpyxl/xlrd
+    # (表格处理), 供 agent 生成 python 代码直接使用。
+    pip3 install --no-cache-dir --retries 3 --timeout 60 \
+        "lxml==6.0.1" "requests==2.32.5" "python-pptx==1.0.2" \
+        "pypdf" "reportlab" "pandas" "openpyxl" "xlrd" \
+        --index-url ${PIP_INDEX_URL} \
+    || pip3 install --no-cache-dir \
+        "lxml==6.0.1" "requests==2.32.5" "python-pptx==1.0.2" \
+        "pypdf" "reportlab" "pandas" "openpyxl" "xlrd" \
+    || echo "WARN: office/doc python packages install failed; continuing"; \
+    python3 -c "import lxml, requests, pptx, pypdf, reportlab, pandas, openpyxl, xlrd; print('doc-python-pkgs OK')" 2>/dev/null \
+    || echo "WARN: office/doc python packages import check failed"; \
     python3 -c "import yaml, nacos; print('PyYAML', yaml.__version__, '| nacos-sdk-python', nacos.__version__)" 2>/dev/null \
     || echo "WARN: PyYAML/nacos import check failed"; \
     python3 --version && pip3 --version && \
@@ -819,7 +847,16 @@ RUN export PATH="/usr/local/bin:$PATH" \
          || npm install -g --no-fund --no-audit --registry ${NPM_REGISTRY} \
             tsx@^4.19.2 \
             typescript@^5.0.0 \
-            mcp2rest \
+            mcp2rest@0.6.1 \
+            docx \
+            axios@1.6.2 \
+            commander@11.1.0 \
+            ws@8.20.0 \
+            sharp@0.34.5 \
+            pptxgenjs@4.0.1 \
+            react@19.2.6 \
+            react-dom@19.2.6 \
+            react-icons@5.5.0 \
             pm2@7.0.3 \
             @agent-infra/mcp-server-browser@${MCP_SERVER_BROWSER_VERSION} \
             chrome-devtools-mcp@0.21.0 \
@@ -828,8 +865,17 @@ RUN export PATH="/usr/local/bin:$PATH" \
          npm install -g --no-fund --no-audit --registry ${NPM_REGISTRY} \
             tsx@^4.19.2 \
             typescript@^5.0.0 \
-            mcp2rest \
+            mcp2rest@0.6.1 \
             @anthropic-ai/claude-agent-sdk@0.2.63 \
+            docx \
+            axios@1.6.2 \
+            commander@11.1.0 \
+            ws@8.20.0 \
+            sharp@0.34.5 \
+            pptxgenjs@4.0.1 \
+            react@19.2.6 \
+            react-dom@19.2.6 \
+            react-icons@5.5.0 \
             pm2@7.0.3 \
             @agent-infra/mcp-server-browser@${MCP_SERVER_BROWSER_VERSION} \
             chrome-devtools-mcp@0.21.0 \
@@ -957,6 +1003,9 @@ ENV HOME=/home/x
 ENV NPM_CONFIG_PREFIX=/home/x/.npm-global
 ENV NPM_CONFIG_CACHE=/home/x/.npm
 ENV PATH=/home/x/.npm-global/bin:/home/x/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# NODE_PATH：与 builder §4 一致，让运行时 require 到全局 npm 包
+# (docx/axios/sharp/pptxgenjs/react 等)。
+ENV NODE_PATH=/home/x/.npm-global/lib/node_modules
 ENV ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 ENV ANTHROPIC_MODEL=CMB_Model
 ENV ANTHROPIC_SMALL_FAST_MODEL=CMB_Model

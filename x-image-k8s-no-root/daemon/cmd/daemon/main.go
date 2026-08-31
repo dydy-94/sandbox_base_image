@@ -17,6 +17,7 @@ import (
 	golog "log"
 
 	"github.com/daytonaio/daemon/cmd/daemon/config"
+	"github.com/daytonaio/daemon/internal"
 	"github.com/daytonaio/daemon/internal/util"
 	"github.com/daytonaio/daemon/pkg/ssh"
 	"github.com/daytonaio/daemon/pkg/terminal"
@@ -52,6 +53,10 @@ func main() {
 	}
 
 	initLogs(logWriter)
+
+	// 启动 banner：输出构建版本与时间，便于确认部署镜像是否为期望版本。
+	log.Infof("daytona daemon starting: version=%s build_time=%s git_commit=%s",
+		internal.Version, internal.BuildTime, internal.GitCommit)
 
 	log.Infof("config loaded in %s", time.Since(processStart))
 
