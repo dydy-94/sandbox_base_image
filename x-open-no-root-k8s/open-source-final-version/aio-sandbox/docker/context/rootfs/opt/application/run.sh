@@ -928,21 +928,14 @@ export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
 export XAUTHORITY="${XAUTHORITY:-/tmp/.X11-unix/Xauthority}"
 
 # ----------------------
-# Pre-start pm2 daemon as user x so that rpc.sock/pub.sock are owned by x.
-# sandbox-guard (running as root via supervisord) will later call `pm2 start`
-# to launch xagent/memory-storage. If pm2 daemon is first spawned by root,
-# the socket files are owned by root and user x gets "permission denied"
-# when running `pm2 list`. Starting the daemon here as user x ensures the
-# sockets inherit the correct ownership.
+# Prepare PM2_HOME before supervisord starts. sandbox-pm2-runtime is the sole
+# PM2 daemon owner in the rootless image and runs as user x, so it creates
+# rpc.sock/pub.sock with the correct ownership without a separate pre-warm.
 # ----------------------
 if [ -n "${USER:-}" ] && [ "${USER}" != "root" ]; then
   mkdir -p /home/${USER}/.pm2
   chown ${USER_UID:-1000}:${USER_GID:-1000} /home/${USER}/.pm2
   chmod 755 /home/${USER}/.pm2
-  # Trigger pm2 daemon startup as user x (non-blocking, just ensures daemon exists)
-  su - ${USER} -c "pm2 ping >/dev/null 2>&1" || true
-  # Ensure socket ownership even if daemon was already running as root
-  chown ${USER_UID:-1000}:${USER_GID:-1000} /home/${USER}/.pm2/rpc.sock /home/${USER}/.pm2/pub.sock 2>/dev/null || true
 fi
 
 # ----------------------
